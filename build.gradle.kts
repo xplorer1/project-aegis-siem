@@ -36,6 +36,10 @@ dependencies {
     // Reactor Netty for high-performance network handling
     implementation("io.projectreactor.netty:reactor-netty")
     
+    // Spring MVC for control plane APIs (Task 1.4)
+    // Note: This creates a dual web stack - WebFlux for ingestion, MVC for control plane
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
