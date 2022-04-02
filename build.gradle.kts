@@ -30,6 +30,12 @@ dependencyManagement {
 }
 
 dependencies {
+    // Spring WebFlux for reactive non-blocking I/O (Task 1.3)
+    implementation("org.springframework.boot:spring-boot-starter-webflux")
+    
+    // Reactor Netty for high-performance network handling
+    implementation("io.projectreactor.netty:reactor-netty")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
