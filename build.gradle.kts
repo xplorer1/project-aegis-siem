@@ -40,6 +40,13 @@ dependencies {
     // Note: This creates a dual web stack - WebFlux for ingestion, MVC for control plane
     implementation("org.springframework.boot:spring-boot-starter-web")
     
+    // Kafka client dependencies (Task 1.5)
+    // Spring Kafka provides Spring integration with Kafka
+    implementation("org.springframework.kafka:spring-kafka")
+    
+    // Kafka clients library for producer/consumer APIs
+    implementation("org.apache.kafka:kafka-clients")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
