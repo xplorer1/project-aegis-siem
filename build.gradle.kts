@@ -47,6 +47,13 @@ dependencies {
     // Kafka clients library for producer/consumer APIs
     implementation("org.apache.kafka:kafka-clients")
     
+    // Redis dependencies (Task 1.6)
+    // Spring Data Redis for Redis integration and state management
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
+    
+    // Lettuce Core for reactive Redis client
+    implementation("io.lettuce:lettuce-core")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
