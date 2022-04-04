@@ -54,6 +54,13 @@ dependencies {
     // Lettuce Core for reactive Redis client
     implementation("io.lettuce:lettuce-core")
     
+    // OpenSearch dependencies (Task 1.7)
+    // OpenSearch REST High Level Client for Hot Tier storage operations
+    implementation("org.opensearch.client:opensearch-rest-high-level-client:2.12.0")
+    
+    // OpenSearch Java Client for modern API access
+    implementation("org.opensearch.client:opensearch-java:2.8.0")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
