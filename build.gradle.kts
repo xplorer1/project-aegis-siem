@@ -61,6 +61,16 @@ dependencies {
     // OpenSearch Java Client for modern API access
     implementation("org.opensearch.client:opensearch-java:2.8.0")
     
+    // ClickHouse dependencies (Task 1.8)
+    // ClickHouse JDBC driver for Warm Tier storage operations
+    implementation("com.clickhouse:clickhouse-jdbc:0.6.0")
+    
+    // ClickHouse HTTP client for better performance
+    implementation("com.clickhouse:clickhouse-http-client:0.6.0")
+    
+    // Spring JDBC for JDBC template support
+    implementation("org.springframework.boot:spring-boot-starter-jdbc")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
