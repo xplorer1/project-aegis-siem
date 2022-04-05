@@ -71,6 +71,13 @@ dependencies {
     // Spring JDBC for JDBC template support
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     
+    // Apache Flink dependencies (Task 1.9)
+    // Flink Streaming Java for stream processing and correlation engine
+    implementation("org.apache.flink:flink-streaming-java:1.18.1")
+    
+    // Flink Kafka Connector for consuming from Kafka topics
+    implementation("org.apache.flink:flink-connector-kafka:3.0.2-1.18")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
