@@ -78,6 +78,13 @@ dependencies {
     // Flink Kafka Connector for consuming from Kafka topics
     implementation("org.apache.flink:flink-connector-kafka:3.0.2-1.18")
     
+    // Apache Iceberg dependencies (Task 1.10)
+    // Iceberg Core for cold storage lakehouse functionality
+    implementation("org.apache.iceberg:iceberg-core:1.5.0")
+    
+    // Iceberg Parquet for columnar storage format
+    implementation("org.apache.iceberg:iceberg-parquet:1.5.0")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
