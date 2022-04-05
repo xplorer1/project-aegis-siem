@@ -5,6 +5,7 @@ import com.aegis.query.parser.AQLParser;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,6 +14,9 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class AqlTranspiler {
+
+    @Autowired
+    private OpenSearchTranspiler openSearchTranspiler;
 
     /**
      * Transpile an AQL query string to a QueryPlan
@@ -89,8 +93,7 @@ public class AqlTranspiler {
      * Transpile to OpenSearch DSL for hot tier
      */
     private SubQuery transpileToOpenSearch(QueryContext context) {
-        // Implementation in Phase 15
-        return null;
+        return new OpenSearchQuery(openSearchTranspiler.transpileToOpenSearch(context));
     }
 
     /**
