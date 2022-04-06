@@ -85,6 +85,13 @@ dependencies {
     // Iceberg Parquet for columnar storage format
     implementation("org.apache.iceberg:iceberg-parquet:1.5.0")
     
+    // Jackson dependencies (Task 1.11)
+    // Jackson Databind for JSON processing
+    implementation("com.fasterxml.jackson.core:jackson-databind")
+    
+    // Jackson Afterburner module for bytecode generation and performance
+    implementation("com.fasterxml.jackson.module:jackson-module-afterburner")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
