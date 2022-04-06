@@ -92,6 +92,13 @@ dependencies {
     // Jackson Afterburner module for bytecode generation and performance
     implementation("com.fasterxml.jackson.module:jackson-module-afterburner")
     
+    // GraphQL dependencies (Task 1.12)
+    // Spring Boot GraphQL starter for API Gateway
+    implementation("org.springframework.boot:spring-boot-starter-graphql")
+    
+    // GraphQL Java Extended Scalars for custom scalar types
+    implementation("com.graphql-java:graphql-java-extended-scalars:21.0")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
