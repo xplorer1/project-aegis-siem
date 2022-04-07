@@ -99,6 +99,16 @@ dependencies {
     // GraphQL Java Extended Scalars for custom scalar types
     implementation("com.graphql-java:graphql-java-extended-scalars:21.0")
     
+    // gRPC dependencies (Task 1.13)
+    // gRPC Spring Boot Starter for high-performance RPC
+    implementation("net.devh:grpc-spring-boot-starter:2.15.0.RELEASE")
+    
+    // gRPC Protobuf for protocol buffer support
+    implementation("io.grpc:grpc-protobuf:1.62.2")
+    
+    // gRPC Stub for generated service stubs
+    implementation("io.grpc:grpc-stub:1.62.2")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
