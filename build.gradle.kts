@@ -2,6 +2,7 @@ plugins {
     java
     id("org.springframework.boot") version "3.2.5"
     id("io.spring.dependency-management") version "1.1.4"
+    id("antlr")
 }
 
 group = "com.aegis"
@@ -108,6 +109,11 @@ dependencies {
     
     // gRPC Stub for generated service stubs
     implementation("io.grpc:grpc-stub:1.62.2")
+    
+    // ANTLR4 dependencies (Task 1.14)
+    // ANTLR4 Runtime for AQL parser
+    antlr("org.antlr:antlr4:4.13.1")
+    implementation("org.antlr:antlr4-runtime:4.13.1")
     
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
