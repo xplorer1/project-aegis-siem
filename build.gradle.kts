@@ -119,6 +119,13 @@ dependencies {
     // ONNX Runtime for ML model inference in UEBA
     implementation("com.microsoft.onnxruntime:onnxruntime:1.17.1")
     
+    // Chronicle Queue dependencies (Task 1.16)
+    // Chronicle Queue for reflexive disk buffering
+    implementation("net.openhft:chronicle-queue:5.25ea0")
+    
+    // Chronicle Bytes for low-level byte manipulation
+    implementation("net.openhft:chronicle-bytes:2.25ea0")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
