@@ -115,6 +115,10 @@ dependencies {
     antlr("org.antlr:antlr4:4.13.1")
     implementation("org.antlr:antlr4-runtime:4.13.1")
     
+    // ONNX Runtime dependencies (Task 1.15)
+    // ONNX Runtime for ML model inference in UEBA
+    implementation("com.microsoft.onnxruntime:onnxruntime:1.17.1")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
