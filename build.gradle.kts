@@ -126,6 +126,13 @@ dependencies {
     // Chronicle Bytes for low-level byte manipulation
     implementation("net.openhft:chronicle-bytes:2.25ea0")
     
+    // Guava and Caffeine cache dependencies (Task 1.17)
+    // Guava for utilities including Bloom filters
+    implementation("com.google.guava:guava:33.1.0-jre")
+    
+    // Caffeine for high-performance local caching
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
