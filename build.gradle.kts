@@ -133,6 +133,13 @@ dependencies {
     // Caffeine for high-performance local caching
     implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
     
+    // Micrometer and Prometheus dependencies (Task 1.18)
+    // Micrometer Prometheus registry for metrics export
+    implementation("io.micrometer:micrometer-registry-prometheus")
+    
+    // Micrometer Tracing for distributed tracing
+    implementation("io.micrometer:micrometer-tracing")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
