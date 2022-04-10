@@ -140,6 +140,13 @@ dependencies {
     // Micrometer Tracing for distributed tracing
     implementation("io.micrometer:micrometer-tracing")
     
+    // OpenTelemetry dependencies (Task 1.19)
+    // OpenTelemetry API for distributed tracing
+    implementation("io.opentelemetry:opentelemetry-api:1.36.0")
+    
+    // OpenTelemetry OTLP Exporter for trace export
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp:1.36.0")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
