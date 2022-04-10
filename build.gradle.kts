@@ -147,6 +147,13 @@ dependencies {
     // OpenTelemetry OTLP Exporter for trace export
     implementation("io.opentelemetry:opentelemetry-exporter-otlp:1.36.0")
     
+    // Testing dependencies (Task 1.20)
+    // Spring Boot Test Starter for testing support
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    
+    // Reactor Test for WebFlux testing
+    testImplementation("io.projectreactor:reactor-test")
+    
     // Spring Boot dependencies will be added in subsequent tasks
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
