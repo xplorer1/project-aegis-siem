@@ -161,6 +161,13 @@ dependencies {
     
     // AssertJ for fluent assertions
     testImplementation("org.assertj:assertj-core:3.25.3")
+    
+    // Testcontainers dependencies (Task 1.22)
+    // Testcontainers Kafka for integration testing
+    testImplementation("org.testcontainers:kafka:1.19.7")
+    
+    // Testcontainers Redis for integration testing
+    testImplementation("com.redis.testcontainers:testcontainers-redis:1.6.4")
 }
 
 tasks.withType<Test> {
