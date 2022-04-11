@@ -154,9 +154,13 @@ dependencies {
     // Reactor Test for WebFlux testing
     testImplementation("io.projectreactor:reactor-test")
     
-    // Spring Boot dependencies will be added in subsequent tasks
+    // JUnit 5 and AssertJ dependencies (Task 1.21)
+    // JUnit Jupiter for unit testing
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    
+    // AssertJ for fluent assertions
+    testImplementation("org.assertj:assertj-core:3.25.3")
 }
 
 tasks.withType<Test> {
