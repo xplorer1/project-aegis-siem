@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: aegis-siem
+
+server:
+  port: 8080
+  
+# WebFlux server for ingestion
+spring.webflux:
+  base-path: /api
+
+# Management endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# Logging configuration
+logging:
+  level:
+    root: INFO
+    com.aegis: INFO
