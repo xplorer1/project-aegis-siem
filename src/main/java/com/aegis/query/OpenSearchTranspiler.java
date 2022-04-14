@@ -107,7 +107,62 @@ public class OpenSearchTranspiler {
      * Add aggregations to search source builder
      */
     private void addAggregations(SearchSourceBuilder searchSourceBuilder, StatsClause statsClause) {
-        // Implementation in subsequent tasks
+        // If there are group by fields, create a terms aggregation
+        if (!statsClause.getGroupByFields().isEmpty()) {
+            // Multi-level nested aggregations for group by
+            AggregationBuilder rootAgg = null;
+            AggregationBuilder currentAgg = null;
+            
+            for (String groupByField : statsClause.getGroupByFields()) {
+                AggregationBuilder termsAgg = AggregationBuilders.terms(groupByField)
+                        .field(groupByField + ".keyword")
+                        .size(1000);
+                
+                if (rootAgg == null) {
+                    rootAgg = termsAgg;
+                    currentAgg = termsAgg;
+                } else {
+                    currentAgg.subAggregation(termsAgg);
+                    currentAgg = termsAgg;
+                }
+            }
+            
+            // Add metric aggregations to the innermost group by
+            for (Aggregation agg : statsClause.getAggregations()) {
+                AggregationBuilder metricAgg = createMetricAggregation(agg);
+                if (metricAgg != null) {
+                    currentAgg.subAggregation(metricAgg);
+                }
+            }
+            
+            searchSourceBuilder.aggregation(rootAgg);
+        } else {
+            // No group by, just add metric aggregations
+            for (Aggregation agg : statsClause.getAggregations()) {
+                AggregationBuilder metricAgg = createMetricAggregation(agg);
+                if (metricAgg != null) {
+                    searchSourceBuilder.aggregation(metricAgg);
+                }
+            }
+        }
+    }
+
+    /**
+     * Create a metric aggregation from an Aggregation
+     */
+    private AggregationBuilder createMetricAggregation(Aggregation agg) {
+        String function = agg.getFunction().toLowerCase();
+        String field = agg.getField();
+        String alias = agg.getAlias();
+        
+        return switch (function) {
+            case "count" -> AggregationBuilders.count(alias).field(field);
+            case "sum" -> AggregationBuilders.sum(alias).field(field);
+            case "avg" -> AggregationBuilders.avg(alias).field(field);
+            case "min" -> AggregationBuilders.min(alias).field(field);
+            case "max" -> AggregationBuilders.max(alias).field(field);
+            default -> null;
+        };
     }
 
     /**
