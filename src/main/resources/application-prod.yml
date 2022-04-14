@@ -1,0 +1,104 @@
+# Production Profile Configuration
+
+server:
+  port: 8080
+  shutdown: graceful
+
+# Logging configuration for production
+logging:
+  level:
+    root: WARN
+    com.aegis: INFO
+    org.springframework: WARN
+    reactor.netty: WARN
+    org.apache.kafka: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: /var/log/aegis/application.log
+    max-size: 100MB
+    max-history: 30
+
+# Kafka configuration for production
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    consumer:
+      group-id: aegis-prod
+      auto-offset-reset: latest
+      enable-auto-commit: false
+      max-poll-records: 500
+    producer:
+      acks: all
+      compression-type: lz4
+      batch-size: 65536
+      linger-ms: 10
+      max-in-flight-requests-per-connection: 5
+      enable-idempotence: true
+    properties:
+      security.protocol: SSL
+      ssl.truststore.location: ${KAFKA_TRUSTSTORE_LOCATION}
+      ssl.truststore.password: ${KAFKA_TRUSTSTORE_PASSWORD}
+
+# Redis configuration for production
+  redis:
+    host: ${REDIS_HOST}
+    port: ${REDIS_PORT}
+    password: ${REDIS_PASSWORD}
+    ssl: true
+    timeout: 2000ms
+    lettuce:
+      pool:
+        max-active: 20
+        max-idle: 10
+        min-idle: 5
+
+# OpenSearch configuration for production
+opensearch:
+  hosts: ${OPENSEARCH_HOSTS}
+  username: ${OPENSEARCH_USERNAME}
+  password: ${OPENSEARCH_PASSWORD}
+  connection-timeout: 5000
+  socket-timeout: 60000
+
+# ClickHouse configuration for production
+clickhouse:
+  url: ${CLICKHOUSE_URL}
+  username: ${CLICKHOUSE_USERNAME}
+  password: ${CLICKHOUSE_PASSWORD}
+  socket-timeout: 300000
+
+# Production-specific settings
+aegis:
+  ingestion:
+    buffer-size: 100000
+    spill-enabled: true
+    spill-directory: /var/aegis/buffer
+  rate-limit:
+    enabled: true
+    default-capacity: 10000
+    default-rate: 1000
+  correlation:
+    parallelism: 16
+    checkpoint-interval: 60000
+  storage:
+    hot-tier-retention-days: 7
+    warm-tier-retention-days: 90
+    cold-tier-retention-years: 7
+
+# Management and monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+        step: 1m
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
