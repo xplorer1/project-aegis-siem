@@ -39,6 +39,14 @@ public class OcsfEvent {
     @JsonProperty("category_uid")
     private int categoryUid; // OCSF category identifier
     
+    @Field(type = FieldType.Object)
+    @JsonProperty("threat_info")
+    private ThreatInfo threatInfo;
+    
+    @Field(type = FieldType.Double)
+    @JsonProperty("ueba_score")
+    private Double uebaScore;
+    
     /**
      * Default constructor for Jackson deserialization
      */
@@ -100,5 +108,21 @@ public class OcsfEvent {
     
     public void setCategoryUid(int categoryUid) {
         this.categoryUid = categoryUid;
+    }
+    
+    public ThreatInfo getThreatInfo() {
+        return threatInfo;
+    }
+    
+    public void setThreatInfo(ThreatInfo threatInfo) {
+        this.threatInfo = threatInfo;
+    }
+    
+    public Double getUebaScore() {
+        return uebaScore;
+    }
+    
+    public void setUebaScore(Double uebaScore) {
+        this.uebaScore = uebaScore;
     }
 }
