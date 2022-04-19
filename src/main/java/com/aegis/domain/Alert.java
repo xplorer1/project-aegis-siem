@@ -31,6 +31,26 @@ public class Alert {
     @JsonProperty("severity")
     private int severity;
     
+    @Field(type = FieldType.Text)
+    @JsonProperty("title")
+    private String title;
+    
+    @Field(type = FieldType.Text)
+    @JsonProperty("description")
+    private String description;
+    
+    @Field(type = FieldType.Keyword)
+    @JsonProperty("rule_id")
+    private String ruleId;
+    
+    @Field(type = FieldType.Date)
+    @JsonProperty("acknowledged_at")
+    private Instant acknowledgedAt;
+    
+    @Field(type = FieldType.Keyword)
+    @JsonProperty("acknowledged_by")
+    private String acknowledgedBy;
+    
     /**
      * Default constructor
      */
@@ -79,5 +99,45 @@ public class Alert {
     
     public void setSeverity(int severity) {
         this.severity = severity;
+    }
+    
+    public String getTitle() {
+        return title;
+    }
+    
+    public void setTitle(String title) {
+        this.title = title;
+    }
+    
+    public String getDescription() {
+        return description;
+    }
+    
+    public void setDescription(String description) {
+        this.description = description;
+    }
+    
+    public String getRuleId() {
+        return ruleId;
+    }
+    
+    public void setRuleId(String ruleId) {
+        this.ruleId = ruleId;
+    }
+    
+    public Instant getAcknowledgedAt() {
+        return acknowledgedAt;
+    }
+    
+    public void setAcknowledgedAt(Instant acknowledgedAt) {
+        this.acknowledgedAt = acknowledgedAt;
+    }
+    
+    public String getAcknowledgedBy() {
+        return acknowledgedBy;
+    }
+    
+    public void setAcknowledgedBy(String acknowledgedBy) {
+        this.acknowledgedBy = acknowledgedBy;
     }
 }
