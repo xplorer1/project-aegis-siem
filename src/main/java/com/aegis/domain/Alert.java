@@ -43,6 +43,10 @@ public class Alert {
     @JsonProperty("rule_id")
     private String ruleId;
     
+    @Field(type = FieldType.Keyword)
+    @JsonProperty("status")
+    private AlertStatus status;
+    
     @Field(type = FieldType.Date)
     @JsonProperty("acknowledged_at")
     private Instant acknowledgedAt;
@@ -123,6 +127,14 @@ public class Alert {
     
     public void setRuleId(String ruleId) {
         this.ruleId = ruleId;
+    }
+    
+    public AlertStatus getStatus() {
+        return status;
+    }
+    
+    public void setStatus(AlertStatus status) {
+        this.status = status;
     }
     
     public Instant getAcknowledgedAt() {
