@@ -18,6 +18,9 @@ public class AqlTranspiler {
     @Autowired
     private OpenSearchTranspiler openSearchTranspiler;
 
+    @Autowired
+    private ClickHouseTranspiler clickHouseTranspiler;
+
     /**
      * Transpile an AQL query string to a QueryPlan
      * 
@@ -100,8 +103,7 @@ public class AqlTranspiler {
      * Transpile to ClickHouse SQL for warm tier
      */
     private SubQuery transpileToClickHouse(QueryContext context) {
-        // Implementation in Phase 16
-        return null;
+        return new ClickHouseQuery(clickHouseTranspiler.transpileToClickHouse(context));
     }
 
     /**
