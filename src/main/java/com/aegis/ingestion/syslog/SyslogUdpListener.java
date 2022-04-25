@@ -3,6 +3,7 @@ package com.aegis.ingestion.syslog;
 import com.aegis.domain.RawEvent;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -10,6 +11,7 @@ import reactor.core.publisher.Mono;
 import reactor.netty.Connection;
 import reactor.netty.udp.UdpServer;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 
 /**
@@ -20,11 +22,14 @@ import java.time.Instant;
 @Component
 public class SyslogUdpListener {
     private static final Logger log = LoggerFactory.getLogger(SyslogUdpListener.class);
+    private static final int MAX_EVENT_SIZE = 65507; // Max UDP packet size
     
     private final MeterRegistry meterRegistry;
     private Counter eventsReceived;
     private Counter eventsProcessed;
     private Counter eventsFailed;
+    private Counter eventsOversized;
+    private Timer processingTimer;
     
     public SyslogUdpListener(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
@@ -42,6 +47,14 @@ public class SyslogUdpListener {
         
         this.eventsFailed = Counter.builder("ingestion.udp.events.failed")
             .description("Total UDP events that failed processing")
+            .register(meterRegistry);
+        
+        this.eventsOversized = Counter.builder("ingestion.udp.events.oversized")
+            .description("Total UDP events rejected due to size")
+            .register(meterRegistry);
+        
+        this.processingTimer = Timer.builder("ingestion.udp.processing.time")
+            .description("Time to process UDP events")
             .register(meterRegistry);
     }
     
@@ -87,28 +100,53 @@ public class SyslogUdpListener {
     
     /**
      * Handle incoming UDP event
+     * Validates event size, creates RawEvent, and prepares for Kafka ingestion
      * @param rawBytes The raw event bytes
      * @return Mono that completes when event is handled
      */
     private Mono<Void> handleEvent(byte[] rawBytes) {
-        eventsReceived.increment();
-        
-        return Mono.fromCallable(() -> {
-            try {
-                // Create RawEvent with current timestamp
-                RawEvent event = new RawEvent(rawBytes, Instant.now());
-                
-                // TODO: Send to Kafka producer (will be implemented in later tasks)
-                // For now, just log and count
-                log.debug("Received UDP event: {} bytes", rawBytes.length);
-                eventsProcessed.increment();
-                
-                return event;
-            } catch (Exception e) {
-                log.error("Failed to process UDP event", e);
-                eventsFailed.increment();
-                throw e;
-            }
+        return Mono.defer(() -> {
+            eventsReceived.increment();
+            
+            return processingTimer.record(() -> {
+                try {
+                    // Validate event size
+                    if (rawBytes == null || rawBytes.length == 0) {
+                        log.warn("Received empty UDP event");
+                        eventsFailed.increment();
+                        return Mono.empty();
+                    }
+                    
+                    if (rawBytes.length > MAX_EVENT_SIZE) {
+                        log.warn("Received oversized UDP event: {} bytes (max: {})", 
+                            rawBytes.length, MAX_EVENT_SIZE);
+                        eventsOversized.increment();
+                        return Mono.empty();
+                    }
+                    
+                    // Create RawEvent with current timestamp
+                    RawEvent event = new RawEvent(rawBytes, Instant.now());
+                    
+                    // Log event details at trace level
+                    if (log.isTraceEnabled()) {
+                        String preview = new String(rawBytes, 0, 
+                            Math.min(100, rawBytes.length), StandardCharsets.UTF_8);
+                        log.trace("Received UDP event: {} bytes, preview: {}", 
+                            rawBytes.length, preview);
+                    }
+                    
+                    // TODO: Send to Kafka producer (will be implemented in later tasks)
+                    // For now, just count as processed
+                    eventsProcessed.increment();
+                    
+                    return Mono.empty();
+                    
+                } catch (Exception e) {
+                    log.error("Failed to process UDP event", e);
+                    eventsFailed.increment();
+                    return Mono.error(e);
+                }
+            });
         }).then();
     }
 }
