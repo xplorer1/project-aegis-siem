@@ -51,10 +51,23 @@ public class SyslogUdpListener {
      * @return Mono that completes when the server is disposed
      */
     public Mono<Void> listen(int port) {
-        log.info("Starting UDP listener on port {}", port);
+        return listen(port, 65536); // Default 64KB buffer
+    }
+    
+    /**
+     * Start listening for UDP syslog events on the specified port with custom buffer size
+     * @param port The UDP port to bind to
+     * @param bufferSize The receive buffer size in bytes
+     * @return Mono that completes when the server is disposed
+     */
+    public Mono<Void> listen(int port, int bufferSize) {
+        log.info("Starting UDP listener on port {} with buffer size {} bytes", port, bufferSize);
         
         return UdpServer.create()
             .port(port)
+            .option(io.netty.channel.ChannelOption.SO_RCVBUF, bufferSize)
+            .option(io.netty.channel.ChannelOption.SO_REUSEADDR, true)
+            .wiretap(false) // Disable wiretap in production for performance
             .handle((in, out) -> {
                 return in.receive()
                     .asByteArray()
@@ -62,8 +75,13 @@ public class SyslogUdpListener {
                     .then();
             })
             .bind()
-            .doOnSuccess(connection -> log.info("UDP listener bound successfully on port {}", port))
-            .doOnError(error -> log.error("Failed to bind UDP listener on port {}", port, error))
+            .doOnSuccess(connection -> {
+                log.info("UDP listener bound successfully on port {} with buffer size {} bytes", 
+                    port, bufferSize);
+            })
+            .doOnError(error -> {
+                log.error("Failed to bind UDP listener on port {}", port, error);
+            })
             .flatMap(Connection::onDispose);
     }
     
