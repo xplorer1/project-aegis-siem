@@ -29,10 +29,16 @@ public class SyslogUdpListener {
     private Counter eventsProcessed;
     private Counter eventsFailed;
     private Counter eventsOversized;
+    private Counter eventsDropped;
     private Timer processingTimer;
+    
+    // Backpressure handling
+    private final java.util.concurrent.Semaphore backpressureSemaphore;
+    private static final int MAX_CONCURRENT_EVENTS = 10000; // Limit concurrent processing
     
     public SyslogUdpListener(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
+        this.backpressureSemaphore = new java.util.concurrent.Semaphore(MAX_CONCURRENT_EVENTS);
         initializeMetrics();
     }
     
@@ -53,9 +59,17 @@ public class SyslogUdpListener {
             .description("Total UDP events rejected due to size")
             .register(meterRegistry);
         
+        this.eventsDropped = Counter.builder("ingestion.udp.events.dropped")
+            .description("Total UDP events dropped due to backpressure")
+            .register(meterRegistry);
+        
         this.processingTimer = Timer.builder("ingestion.udp.processing.time")
             .description("Time to process UDP events")
             .register(meterRegistry);
+        
+        // Register gauge for available permits
+        meterRegistry.gauge("ingestion.udp.backpressure.available", 
+            backpressureSemaphore, java.util.concurrent.Semaphore::availablePermits);
     }
     
     /**
@@ -101,12 +115,20 @@ public class SyslogUdpListener {
     /**
      * Handle incoming UDP event
      * Validates event size, creates RawEvent, and prepares for Kafka ingestion
+     * Implements backpressure handling to prevent memory exhaustion
      * @param rawBytes The raw event bytes
      * @return Mono that completes when event is handled
      */
     private Mono<Void> handleEvent(byte[] rawBytes) {
         return Mono.defer(() -> {
             eventsReceived.increment();
+            
+            // Try to acquire permit for backpressure control
+            if (!backpressureSemaphore.tryAcquire()) {
+                log.warn("Backpressure limit reached, dropping UDP event");
+                eventsDropped.increment();
+                return Mono.empty();
+            }
             
             return processingTimer.record(() -> {
                 try {
@@ -145,6 +167,9 @@ public class SyslogUdpListener {
                     log.error("Failed to process UDP event", e);
                     eventsFailed.increment();
                     return Mono.error(e);
+                } finally {
+                    // Release permit
+                    backpressureSemaphore.release();
                 }
             });
         }).then();
