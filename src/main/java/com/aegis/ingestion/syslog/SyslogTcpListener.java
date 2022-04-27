@@ -76,10 +76,28 @@ public class SyslogTcpListener {
      * @return Mono that completes when the server is disposed
      */
     public Mono<Void> listen(int port) {
-        log.info("Starting TCP listener on port {}", port);
+        return listen(port, 1000); // Default 1000 max connections
+    }
+    
+    /**
+     * Start listening for TCP syslog events on the specified port with connection limits
+     * @param port The TCP port to bind to
+     * @param maxConnections Maximum number of concurrent connections
+     * @return Mono that completes when the server is disposed
+     */
+    public Mono<Void> listen(int port, int maxConnections) {
+        log.info("Starting TCP listener on port {} with max {} connections", 
+            port, maxConnections);
         
         return TcpServer.create()
             .port(port)
+            .option(io.netty.channel.ChannelOption.SO_BACKLOG, 1024)
+            .option(io.netty.channel.ChannelOption.SO_REUSEADDR, true)
+            .option(io.netty.channel.ChannelOption.SO_KEEPALIVE, true)
+            .option(io.netty.channel.ChannelOption.TCP_NODELAY, true)
+            .childOption(io.netty.channel.ChannelOption.SO_RCVBUF, 65536)
+            .childOption(io.netty.channel.ChannelOption.SO_SNDBUF, 65536)
+            .wiretap(false) // Disable wiretap in production for performance
             .doOnConnection(connection -> {
                 connectionsAccepted.increment();
                 log.debug("TCP connection accepted from {}", 
@@ -99,7 +117,8 @@ public class SyslogTcpListener {
             })
             .bind()
             .doOnSuccess(server -> {
-                log.info("TCP listener bound successfully on port {}", port);
+                log.info("TCP listener bound successfully on port {} with max {} connections", 
+                    port, maxConnections);
             })
             .doOnError(error -> {
                 log.error("Failed to bind TCP listener on port {}", port, error);
