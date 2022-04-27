@@ -140,8 +140,6 @@ public class ClickHouseRepository {
             return event;
         }
     }
-}
-
     
     /**
      * Aggregate events by category

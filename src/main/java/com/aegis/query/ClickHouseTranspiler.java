@@ -100,8 +100,8 @@ public class ClickHouseTranspiler {
         String earliest = DATETIME_FORMATTER.format(Instant.ofEpochMilli(timeRange.getEarliest()));
         String latest = DATETIME_FORMATTER.format(Instant.ofEpochMilli(timeRange.getLatest()));
         
-        where.append("timestamp >= '").append(earliest).append("'");
-        where.append(" AND timestamp <= '").append(latest).append("'");
+        where.append("time >= '").append(earliest).append("'");
+        where.append(" AND time <= '").append(latest).append("'");
         
         // Additional where expressions
         if (context.getWhereExpression() != null) {

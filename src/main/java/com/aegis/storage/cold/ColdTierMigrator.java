@@ -105,8 +105,6 @@ public class ColdTierMigrator {
             throw new RuntimeException("Cold tier migration failed", e);
         }
     }
-}
-
     
     /**
      * Register Parquet file with Iceberg table
