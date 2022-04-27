@@ -5,14 +5,20 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 import reactor.netty.Connection;
 import reactor.netty.tcp.TcpServer;
+import reactor.netty.tcp.TcpSslContextSpec;
 
+import javax.net.ssl.SSLException;
 import java.nio.charset.StandardCharsets;
+import java.security.cert.CertificateException;
 import java.time.Instant;
 
 /**
@@ -76,7 +82,7 @@ public class SyslogTcpListener {
      * @return Mono that completes when the server is disposed
      */
     public Mono<Void> listen(int port) {
-        return listen(port, 1000); // Default 1000 max connections
+        return listen(port, 1000, false); // Default 1000 max connections, no TLS
     }
     
     /**
@@ -86,10 +92,21 @@ public class SyslogTcpListener {
      * @return Mono that completes when the server is disposed
      */
     public Mono<Void> listen(int port, int maxConnections) {
-        log.info("Starting TCP listener on port {} with max {} connections", 
-            port, maxConnections);
+        return listen(port, maxConnections, false); // No TLS by default
+    }
+    
+    /**
+     * Start listening for TCP syslog events on the specified port with TLS
+     * @param port The TCP port to bind to
+     * @param maxConnections Maximum number of concurrent connections
+     * @param enableTls Whether to enable TLS encryption
+     * @return Mono that completes when the server is disposed
+     */
+    public Mono<Void> listen(int port, int maxConnections, boolean enableTls) {
+        log.info("Starting TCP listener on port {} with max {} connections, TLS: {}", 
+            port, maxConnections, enableTls);
         
-        return TcpServer.create()
+        TcpServer server = TcpServer.create()
             .port(port)
             .option(io.netty.channel.ChannelOption.SO_BACKLOG, 1024)
             .option(io.netty.channel.ChannelOption.SO_REUSEADDR, true)
@@ -97,7 +114,21 @@ public class SyslogTcpListener {
             .option(io.netty.channel.ChannelOption.TCP_NODELAY, true)
             .childOption(io.netty.channel.ChannelOption.SO_RCVBUF, 65536)
             .childOption(io.netty.channel.ChannelOption.SO_SNDBUF, 65536)
-            .wiretap(false) // Disable wiretap in production for performance
+            .wiretap(false); // Disable wiretap in production for performance
+        
+        // Add TLS if enabled
+        if (enableTls) {
+            try {
+                SslContext sslContext = createSslContext();
+                server = server.secure(spec -> spec.sslContext(sslContext));
+                log.info("TLS enabled for TCP listener on port {}", port);
+            } catch (Exception e) {
+                log.error("Failed to configure TLS for TCP listener", e);
+                return Mono.error(e);
+            }
+        }
+        
+        return server
             .doOnConnection(connection -> {
                 connectionsAccepted.increment();
                 log.debug("TCP connection accepted from {}", 
@@ -116,14 +147,29 @@ public class SyslogTcpListener {
                     .then();
             })
             .bind()
-            .doOnSuccess(server -> {
-                log.info("TCP listener bound successfully on port {} with max {} connections", 
-                    port, maxConnections);
+            .doOnSuccess(server2 -> {
+                log.info("TCP listener bound successfully on port {} with max {} connections, TLS: {}", 
+                    port, maxConnections, enableTls);
             })
             .doOnError(error -> {
                 log.error("Failed to bind TCP listener on port {}", port, error);
             })
             .flatMap(Connection::onDispose);
+    }
+    
+    /**
+     * Create SSL context for TLS support
+     * In production, this should load certificates from a keystore
+     * @return SslContext configured for server-side TLS
+     */
+    private SslContext createSslContext() throws CertificateException, SSLException {
+        // For development/testing, use self-signed certificate
+        // In production, replace with proper certificate loading from keystore
+        SelfSignedCertificate ssc = new SelfSignedCertificate();
+        
+        return SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey())
+            .protocols("TLSv1.2", "TLSv1.3")
+            .build();
     }
     
     /**
