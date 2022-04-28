@@ -175,6 +175,7 @@ public class SyslogTcpListener {
     /**
      * Handle incoming TCP event
      * Validates event size, creates RawEvent, and prepares for Kafka ingestion
+     * TCP events may be framed by newlines or length-prefixed
      * @param rawBytes The raw event bytes
      * @return Mono that completes when event is handled
      */
@@ -198,15 +199,22 @@ public class SyslogTcpListener {
                         return Mono.empty();
                     }
                     
+                    // Strip trailing newline if present (common in syslog over TCP)
+                    byte[] processedBytes = rawBytes;
+                    if (rawBytes.length > 0 && rawBytes[rawBytes.length - 1] == NEWLINE) {
+                        processedBytes = new byte[rawBytes.length - 1];
+                        System.arraycopy(rawBytes, 0, processedBytes, 0, rawBytes.length - 1);
+                    }
+                    
                     // Create RawEvent with current timestamp
-                    RawEvent event = new RawEvent(rawBytes, Instant.now());
+                    RawEvent event = new RawEvent(processedBytes, Instant.now());
                     
                     // Log event details at trace level
                     if (log.isTraceEnabled()) {
-                        String preview = new String(rawBytes, 0, 
-                            Math.min(100, rawBytes.length), StandardCharsets.UTF_8);
+                        String preview = new String(processedBytes, 0, 
+                            Math.min(100, processedBytes.length), StandardCharsets.UTF_8);
                         log.trace("Received TCP event: {} bytes, preview: {}", 
-                            rawBytes.length, preview);
+                            processedBytes.length, preview);
                     }
                     
                     // TODO: Send to Kafka producer (will be implemented in later tasks)
