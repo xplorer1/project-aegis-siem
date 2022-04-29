@@ -82,7 +82,7 @@ public class HecEndpoint {
         if (extractedToken == null) {
             log.warn("Invalid HEC authorization token");
             requestsRejected.increment();
-            return Mono.just(new HecResponse(0, "Error: Invalid authorization token"));
+            return Mono.just(HecResponse.error("Invalid authorization token"));
         }
         
         // TODO: Validate token against tenant database
@@ -98,12 +98,12 @@ public class HecEndpoint {
                 .count()
                 .map(count -> {
                     log.debug("Processed {} HEC events for tenant {}", count, tenantId);
-                    return new HecResponse(count, "Success");
+                    return HecResponse.success(count);
                 })
                 .onErrorResume(error -> {
                     log.error("Failed to process HEC events", error);
                     eventsFailed.increment();
-                    return Mono.just(new HecResponse(0, "Error: " + error.getMessage()));
+                    return Mono.just(HecResponse.error(error.getMessage()));
                 });
         });
     }
