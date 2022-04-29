@@ -77,16 +77,27 @@ public class HecEndpoint {
         requestsReceived.increment();
         log.debug("Received HEC event ingestion request");
         
-        // TODO: Validate token and extract tenant (will be implemented in next task)
+        // Validate and extract token
+        String extractedToken = extractToken(token);
+        if (extractedToken == null) {
+            log.warn("Invalid HEC authorization token");
+            requestsRejected.increment();
+            return Mono.just(new HecResponse(0, "Error: Invalid authorization token"));
+        }
+        
+        // TODO: Validate token against tenant database
+        // For now, accept any non-empty token
+        String tenantId = extractTenantFromToken(extractedToken);
+        
         // TODO: Apply rate limiting (will be implemented in later tasks)
         
         return processingTimer.record(() -> {
             return events
                 .doOnNext(event -> eventsReceived.increment())
-                .flatMap(event -> processEvent(event))
+                .flatMap(event -> processEvent(event, tenantId))
                 .count()
                 .map(count -> {
-                    log.debug("Processed {} HEC events", count);
+                    log.debug("Processed {} HEC events for tenant {}", count, tenantId);
                     return new HecResponse(count, "Success");
                 })
                 .onErrorResume(error -> {
@@ -95,6 +106,37 @@ public class HecEndpoint {
                     return Mono.just(new HecResponse(0, "Error: " + error.getMessage()));
                 });
         });
+    }
+    
+    /**
+     * Extract token from Authorization header
+     * Expected format: "Splunk <token>" or just "<token>"
+     * @param authHeader Authorization header value
+     * @return Extracted token or null if invalid
+     */
+    private String extractToken(String authHeader) {
+        if (authHeader == null || authHeader.trim().isEmpty()) {
+            return null;
+        }
+        
+        String token = authHeader.trim();
+        if (token.startsWith("Splunk ")) {
+            token = token.substring(7).trim();
+        }
+        
+        return token.isEmpty() ? null : token;
+    }
+    
+    /**
+     * Extract tenant ID from token
+     * In production, this would lookup the tenant from a database
+     * @param token HEC token
+     * @return Tenant ID
+     */
+    private String extractTenantFromToken(String token) {
+        // For now, use a simple hash of the token as tenant ID
+        // In production, this would be a database lookup
+        return "tenant-" + Math.abs(token.hashCode() % 1000);
     }
     
     /**
@@ -110,9 +152,10 @@ public class HecEndpoint {
     /**
      * Process a single HEC event
      * @param event JSON event node
+     * @param tenantId Tenant identifier
      * @return Mono that completes when event is processed
      */
-    private Mono<Void> processEvent(JsonNode event) {
+    private Mono<Void> processEvent(JsonNode event, String tenantId) {
         return Mono.defer(() -> {
             try {
                 // Validate event structure
@@ -122,13 +165,30 @@ public class HecEndpoint {
                     return Mono.empty();
                 }
                 
-                // TODO: Send to Kafka producer (will be implemented in later tasks)
+                // Validate required HEC fields
+                if (!event.has("event")) {
+                    log.warn("HEC event missing required 'event' field");
+                    eventsFailed.increment();
+                    return Mono.empty();
+                }
+                
+                // Extract event data
+                JsonNode eventData = event.get("event");
+                Long time = event.has("time") ? event.get("time").asLong() : null;
+                String host = event.has("host") ? event.get("host").asText() : null;
+                String source = event.has("source") ? event.get("source").asText() : null;
+                String sourcetype = event.has("sourcetype") ? event.get("sourcetype").asText() : null;
+                String index = event.has("index") ? event.get("index").asText() : null;
+                
+                // Log event metadata at trace level
+                if (log.isTraceEnabled()) {
+                    log.trace("Processing HEC event - tenant: {}, time: {}, host: {}, source: {}, sourcetype: {}, index: {}", 
+                        tenantId, time, host, source, sourcetype, index);
+                }
+                
+                // TODO: Create RawEvent and send to Kafka producer (will be implemented in later tasks)
                 // For now, just count as processed
                 eventsProcessed.increment();
-                
-                if (log.isTraceEnabled()) {
-                    log.trace("Processed HEC event: {}", event.toString());
-                }
                 
                 return Mono.empty();
                 
