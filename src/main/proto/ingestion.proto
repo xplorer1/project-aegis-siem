@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.aegis.ingestion.grpc.proto";
+option java_outer_classname = "IngestionProto";
+
+package aegis.ingestion;
+
+// Ingestion Service for high-performance event ingestion via gRPC
+service IngestionService {
+  // Ingest a single event
+  rpc IngestEvent(IngestEventRequest) returns (IngestEventResponse);
+  
+  // Ingest multiple events in a batch
+  rpc IngestEventBatch(IngestEventBatchRequest) returns (IngestEventResponse);
+  
+  // Bidirectional streaming for continuous event ingestion
+  rpc IngestEventStream(stream IngestEventRequest) returns (stream IngestEventResponse);
+}
+
+// Request to ingest a single event
+message IngestEventRequest {
+  // Tenant identifier
+  string tenant_id = 1;
+  
+  // Event data (raw bytes or JSON)
+  bytes event_data = 2;
+  
+  // Event metadata
+  EventMetadata metadata = 3;
+  
+  // Optional timestamp (Unix epoch milliseconds)
+  int64 timestamp = 4;
+}
+
+// Request to ingest multiple events in a batch
+message IngestEventBatchRequest {
+  // Tenant identifier
+  string tenant_id = 1;
+  
+  // List of events
+  repeated EventData events = 2;
+}
+
+// Event data with metadata
+message EventData {
+  // Event data (raw bytes or JSON)
+  bytes event_data = 1;
+  
+  // Event metadata
+  EventMetadata metadata = 2;
+  
+  // Optional timestamp (Unix epoch milliseconds)
+  int64 timestamp = 3;
+}
+
+// Event metadata
+message EventMetadata {
+  // Source of the event (e.g., "firewall", "endpoint", "cloud")
+  string source = 1;
+  
+  // Source type (e.g., "cisco:asa", "windows:eventlog")
+  string source_type = 2;
+  
+  // Host that generated the event
+  string host = 3;
+  
+  // Index or category
+  string index = 4;
+  
+  // Additional custom fields
+  map<string, string> custom_fields = 5;
+}
+
+// Response for event ingestion
+message IngestEventResponse {
+  // Status code (0 = success, non-zero = error)
+  int32 code = 1;
+  
+  // Status message
+  string message = 2;
+  
+  // Number of events successfully ingested
+  int64 events_ingested = 3;
+  
+  // Acknowledgment ID for tracking
+  int64 ack_id = 4;
+  
+  // Optional error details
+  string error_details = 5;
+}
