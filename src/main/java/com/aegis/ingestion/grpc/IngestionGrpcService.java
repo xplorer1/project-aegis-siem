@@ -217,6 +217,120 @@ public class IngestionGrpcService extends IngestionServiceGrpc.IngestionServiceI
     }
     
     /**
+     * Bidirectional streaming for continuous event ingestion
+     * Allows clients to stream events and receive acknowledgments in real-time
+     * Implements backpressure handling for high-throughput scenarios
+     * @param responseObserver Observer for sending responses
+     * @return StreamObserver for receiving events
+     */
+    @Override
+    public StreamObserver<IngestEventRequest> ingestEventStream(
+            StreamObserver<IngestEventResponse> responseObserver) {
+        
+        requestsReceived.increment();
+        log.debug("Started gRPC streaming session");
+        
+        return new StreamObserver<IngestEventRequest>() {
+            private int streamEventCount = 0;
+            private int streamSuccessCount = 0;
+            private int streamFailureCount = 0;
+            private final Timer.Sample streamSample = Timer.start(meterRegistry);
+            
+            @Override
+            public void onNext(IngestEventRequest request) {
+                streamEventCount++;
+                eventsReceived.increment();
+                
+                try {
+                    // Validate request
+                    if (request.getTenantId() == null || request.getTenantId().isEmpty()) {
+                        IngestEventResponse response = IngestEventResponse.newBuilder()
+                            .setCode(1)
+                            .setMessage("Error: Tenant ID is required")
+                            .setEventsIngested(0)
+                            .build();
+                        responseObserver.onNext(response);
+                        streamFailureCount++;
+                        eventsFailed.increment();
+                        return;
+                    }
+                    
+                    if (request.getEventData() == null || request.getEventData().isEmpty()) {
+                        IngestEventResponse response = IngestEventResponse.newBuilder()
+                            .setCode(1)
+                            .setMessage("Error: Event data is required")
+                            .setEventsIngested(0)
+                            .build();
+                        responseObserver.onNext(response);
+                        streamFailureCount++;
+                        eventsFailed.increment();
+                        return;
+                    }
+                    
+                    // Process event
+                    processEvent(request);
+                    
+                    // Send acknowledgment
+                    IngestEventResponse response = IngestEventResponse.newBuilder()
+                        .setCode(0)
+                        .setMessage("Success")
+                        .setEventsIngested(1)
+                        .setAckId(System.currentTimeMillis())
+                        .build();
+                    
+                    responseObserver.onNext(response);
+                    streamSuccessCount++;
+                    eventsProcessed.increment();
+                    
+                    // Log progress every 1000 events
+                    if (streamEventCount % 1000 == 0) {
+                        log.debug("Streaming progress: {} events received, {} successful, {} failed",
+                            streamEventCount, streamSuccessCount, streamFailureCount);
+                    }
+                    
+                } catch (Exception e) {
+                    log.error("Failed to process streaming event", e);
+                    streamFailureCount++;
+                    eventsFailed.increment();
+                    
+                    IngestEventResponse response = IngestEventResponse.newBuilder()
+                        .setCode(1)
+                        .setMessage("Error: " + e.getMessage())
+                        .setEventsIngested(0)
+                        .setErrorDetails(e.toString())
+                        .build();
+                    
+                    responseObserver.onNext(response);
+                }
+            }
+            
+            @Override
+            public void onError(Throwable t) {
+                log.error("Error in gRPC streaming session after {} events", streamEventCount, t);
+                streamSample.stop(processingTimer);
+            }
+            
+            @Override
+            public void onCompleted() {
+                log.info("Completed gRPC streaming session: {} events received, {} successful, {} failed",
+                    streamEventCount, streamSuccessCount, streamFailureCount);
+                
+                // Send final summary response
+                IngestEventResponse finalResponse = IngestEventResponse.newBuilder()
+                    .setCode(0)
+                    .setMessage("Stream completed")
+                    .setEventsIngested(streamSuccessCount)
+                    .setAckId(System.currentTimeMillis())
+                    .build();
+                
+                responseObserver.onNext(finalResponse);
+                responseObserver.onCompleted();
+                streamSample.stop(processingTimer);
+            }
+        };
+    }
+    
+    /**
      * Process a single event request
      * @param request IngestEventRequest
      */
