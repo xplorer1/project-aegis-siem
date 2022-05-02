@@ -1,7 +1,9 @@
 package com.aegis.domain;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -101,5 +103,31 @@ public class RawEvent {
      */
     public void addMetadata(String key, Object value) {
         this.metadata.put(key, value);
+    }
+    
+    /**
+     * Serialize this RawEvent to bytes for Chronicle Queue storage
+     */
+    public byte[] serialize() {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            mapper.findAndRegisterModules(); // Register JavaTimeModule for Instant
+            return mapper.writeValueAsBytes(this);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to serialize RawEvent", e);
+        }
+    }
+    
+    /**
+     * Deserialize a RawEvent from bytes
+     */
+    public static RawEvent deserialize(byte[] data) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            mapper.findAndRegisterModules(); // Register JavaTimeModule for Instant
+            return mapper.readValue(data, RawEvent.class);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to deserialize RawEvent", e);
+        }
     }
 }
