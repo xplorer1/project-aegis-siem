@@ -25,3 +25,9 @@ logging:
   level:
     root: INFO
     com.aegis: INFO
+
+# Aegis Buffer Configuration
+aegis:
+  buffer:
+    queue-directory: ./data/buffer-queue
+    roll-cycle: HOURLY
