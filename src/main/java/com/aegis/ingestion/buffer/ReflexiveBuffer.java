@@ -1,6 +1,8 @@
 package com.aegis.ingestion.buffer;
 
 import com.aegis.domain.RawEvent;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import net.openhft.chronicle.queue.ChronicleQueue;
 import net.openhft.chronicle.queue.ExcerptAppender;
 import net.openhft.chronicle.queue.ExcerptTailer;
@@ -25,14 +27,27 @@ public class ReflexiveBuffer {
     private final KafkaHealthCheck kafkaHealth;
     private final KafkaTemplate<String, RawEvent> kafkaTemplate;
     
+    // Metrics
+    private final Counter spillCounter;
+    private final Counter drainCounter;
+    
     @Autowired
     public ReflexiveBuffer(
             ChronicleQueue diskQueue,
             KafkaHealthCheck kafkaHealth,
-            KafkaTemplate<String, RawEvent> kafkaTemplate) {
+            KafkaTemplate<String, RawEvent> kafkaTemplate,
+            MeterRegistry meterRegistry) {
         this.diskQueue = diskQueue;
         this.kafkaHealth = kafkaHealth;
         this.kafkaTemplate = kafkaTemplate;
+        
+        // Initialize metrics
+        this.spillCounter = Counter.builder("aegis.buffer.spill.events")
+                .description("Number of events spilled to disk")
+                .register(meterRegistry);
+        this.drainCounter = Counter.builder("aegis.buffer.drain.events")
+                .description("Number of events drained from disk")
+                .register(meterRegistry);
     }
     
     /**
@@ -47,6 +62,7 @@ public class ReflexiveBuffer {
                     b.writeInt(serialized.length);
                     b.write(serialized);
                 });
+                spillCounter.increment();
             }
         });
     }
@@ -64,6 +80,7 @@ public class ReflexiveBuffer {
                 
                 // Send to Kafka synchronously during drain
                 kafkaTemplate.send("raw-events", event).get();
+                drainCounter.increment();
             })) {
                 // Continue draining
             }
