@@ -31,3 +31,6 @@ aegis:
   buffer:
     queue-directory: ./data/buffer-queue
     roll-cycle: HOURLY
+  ratelimit:
+    capacity: 10000
+    refill-rate: 1000
