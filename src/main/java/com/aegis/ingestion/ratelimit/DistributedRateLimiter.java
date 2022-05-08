@@ -1,5 +1,7 @@
 package com.aegis.ingestion.ratelimit;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -23,6 +25,10 @@ public class DistributedRateLimiter {
     
     @Value("${aegis.ratelimit.refill-rate:1000}")
     private long refillRate;
+    
+    // Metrics
+    private final Counter acceptedCounter;
+    private final Counter rejectedCounter;
     
     // Lua script for atomic token bucket check-and-decrement
     private static final String LUA_SCRIPT = """
@@ -51,8 +57,16 @@ public class DistributedRateLimiter {
     """;
     
     @Autowired
-    public DistributedRateLimiter(RedisTemplate<String, String> redis) {
+    public DistributedRateLimiter(RedisTemplate<String, String> redis, MeterRegistry meterRegistry) {
         this.redis = redis;
+        
+        // Initialize metrics
+        this.acceptedCounter = Counter.builder("aegis.ratelimit.accepted")
+                .description("Number of requests accepted by rate limiter")
+                .register(meterRegistry);
+        this.rejectedCounter = Counter.builder("aegis.ratelimit.rejected")
+                .description("Number of requests rejected by rate limiter")
+                .register(meterRegistry);
     }
     
     /**
@@ -74,7 +88,16 @@ public class DistributedRateLimiter {
                 String.valueOf(requested),
                 String.valueOf(now)
             );
-            return result != null && result == 1L;
+            boolean acquired = result != null && result == 1L;
+            
+            // Track metrics
+            if (acquired) {
+                acceptedCounter.increment();
+            } else {
+                rejectedCounter.increment();
+            }
+            
+            return acquired;
         });
     }
 }
