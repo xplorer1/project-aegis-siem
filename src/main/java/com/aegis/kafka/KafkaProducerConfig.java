@@ -37,6 +37,12 @@ public class KafkaProducerConfig {
         configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
         
+        // Reliability settings - wait for all replicas to acknowledge
+        configProps.put(ProducerConfig.ACKS_CONFIG, "all");
+        
+        // Compression settings - LZ4 for balance of speed and compression ratio
+        configProps.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "lz4");
+        
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
