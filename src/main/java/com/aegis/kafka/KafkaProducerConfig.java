@@ -47,6 +47,10 @@ public class KafkaProducerConfig {
         configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         configProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
         
+        // Batch settings - optimize for throughput
+        configProps.put(ProducerConfig.BATCH_SIZE_CONFIG, 65536); // 64KB batches
+        configProps.put(ProducerConfig.LINGER_MS_CONFIG, 10); // Small delay for batching
+        
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
