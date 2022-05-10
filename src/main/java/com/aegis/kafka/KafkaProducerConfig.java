@@ -43,6 +43,10 @@ public class KafkaProducerConfig {
         // Compression settings - LZ4 for balance of speed and compression ratio
         configProps.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "lz4");
         
+        // Idempotence settings - exactly-once semantics
+        configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        configProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+        
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
