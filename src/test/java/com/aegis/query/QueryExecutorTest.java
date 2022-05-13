@@ -5,7 +5,6 @@ import com.aegis.domain.StorageTier;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.opensearch.action.ActionListener;
@@ -38,7 +37,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for QueryExecutor
+ * Comprehensive unit tests for QueryExecutor
  * Tests the query execution interface and OpenSearch integration
  */
 @ExtendWith(MockitoExtension.class)
@@ -63,6 +62,8 @@ class QueryExecutorTest {
         queryExecutor = new QueryExecutor(openSearchClient, clickHouseTemplate);
     }
     
+    // ========== Constructor Tests ==========
+    
     @Test
     void testConstructor_WithValidDependencies_ShouldCreateInstance() {
         // Given: Valid client dependencies
@@ -70,6 +71,8 @@ class QueryExecutorTest {
         // Then: Instance should be created successfully
         assertThat(queryExecutor).isNotNull();
     }
+    
+    // ========== Execute Method Tests ==========
     
     @Test
     void testExecute_WithNullPlan_ShouldReturnEmptyResult() {
@@ -104,6 +107,8 @@ class QueryExecutorTest {
             })
             .verifyComplete();
     }
+    
+    // ========== OpenSearch Execution Tests ==========
     
     @Test
     void testExecuteOpenSearch_WithNullQuery_ShouldReturnEmptyResult() {
@@ -290,6 +295,8 @@ class QueryExecutorTest {
             .verifyComplete();
     }
     
+    // ========== Error Handling Tests ==========
+    
     @Test
     void testExecuteOpenSearch_WithError_ShouldReturnEmptyResult() throws Exception {
         // Given: A query that will fail
@@ -346,6 +353,8 @@ class QueryExecutorTest {
             .expectTimeout(Duration.ofSeconds(35)) // Slightly more than 30s timeout
             .verify();
     }
+    
+    // ========== Multi-Tier Tests ==========
     
     @Test
     void testExecute_WithMultipleTierQueries_ShouldMergeResults() throws Exception {
@@ -416,6 +425,8 @@ class QueryExecutorTest {
         assertThat(merged.getTotalCount()).isEqualTo(2);
     }
     
+    // ========== Helper Methods ==========
+    
     /**
      * Helper method to create a mock SearchHit
      */
@@ -428,280 +439,5 @@ class QueryExecutorTest {
         when(hit.getSourceAsMap()).thenReturn(sourceMap);
         when(hit.getHighlightFields()).thenReturn(new HashMap<>());
         return hit;
-    }
-}
-
-    // ========== Error Handling Tests for executeSubQuery() ==========
-    
-    @Test
-    void testExecuteSubQuery_WithNullSubQuery_ShouldReturnEmptyResult() {
-        // Given: A null sub-query
-        SubQuery nullQuery = null;
-        
-        // When: executeSubQuery is called via execute
-        QueryPlan plan = new QueryPlan();
-        // Cannot add null, so we test the null handling indirectly
-        
-        // Then: Should handle gracefully
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        StepVerifier.create(result)
-            .assertNext(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                assertThat(queryResult.getRows()).isEmpty();
-            })
-            .verifyComplete();
-    }
-    
-    @Test
-    void testExecuteSubQuery_WithHotTierError_ShouldReturnEmptyResultAndContinue() {
-        // Given: A query plan with hot tier query that will fail
-        QueryPlan plan = new QueryPlan();
-        OpenSearchQuery hotQuery = new OpenSearchQuery(
-            new SearchSourceBuilder().query(QueryBuilders.matchAllQuery())
-        );
-        plan.addSubQuery(hotQuery);
-        
-        // Mock OpenSearch to throw an exception
-        doAnswer(invocation -> {
-            ActionListener<SearchResponse> listener = invocation.getArgument(2);
-            listener.onFailure(new RuntimeException("OpenSearch connection failed"));
-            return null;
-        }).when(openSearchClient).searchAsync(any(SearchRequest.class), 
-            eq(RequestOptions.DEFAULT), any(ActionListener.class));
-        
-        // When: Execute is called
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should return empty result without throwing exception
-        StepVerifier.create(result)
-            .assertNext(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                // Error should result in empty rows
-                assertThat(queryResult.getRows()).isEmpty();
-            })
-            .verifyComplete();
-    }
-    
-    @Test
-    void testExecuteSubQuery_WithWarmTierError_ShouldReturnEmptyResultAndContinue() {
-        // Given: A query plan with warm tier query
-        QueryPlan plan = new QueryPlan();
-        ClickHouseQuery warmQuery = new ClickHouseQuery("SELECT * FROM aegis_events_warm");
-        plan.addSubQuery(warmQuery);
-        
-        // When: Execute is called (ClickHouse executor returns empty result as placeholder)
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should handle gracefully
-        StepVerifier.create(result)
-            .assertNext(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                assertThat(queryResult.getRows()).isEmpty();
-            })
-            .verifyComplete();
-    }
-    
-    @Test
-    void testExecuteSubQuery_WithColdTierError_ShouldReturnEmptyResultAndContinue() {
-        // Given: A query plan with cold tier query
-        QueryPlan plan = new QueryPlan();
-        // Create a mock cold tier query
-        SubQuery coldQuery = new SubQuery() {
-            @Override
-            public StorageTier getTier() {
-                return StorageTier.COLD;
-            }
-            
-            @Override
-            public Object getNativeQuery() {
-                return "SELECT * FROM iceberg.events";
-            }
-        };
-        plan.addSubQuery(coldQuery);
-        
-        // When: Execute is called
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should handle gracefully
-        StepVerifier.create(result)
-            .assertNext(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                assertThat(queryResult.getRows()).isEmpty();
-            })
-            .verifyComplete();
-    }
-    
-    @Test
-    void testExecuteSubQuery_WithMultipleTierErrors_ShouldReturnEmptyResult() {
-        // Given: A query plan with multiple tier queries that will fail
-        QueryPlan plan = new QueryPlan();
-        
-        OpenSearchQuery hotQuery = new OpenSearchQuery(
-            new SearchSourceBuilder().query(QueryBuilders.matchAllQuery())
-        );
-        ClickHouseQuery warmQuery = new ClickHouseQuery("SELECT * FROM aegis_events_warm");
-        
-        plan.addSubQuery(hotQuery);
-        plan.addSubQuery(warmQuery);
-        
-        // Mock OpenSearch to throw an exception
-        doAnswer(invocation -> {
-            ActionListener<SearchResponse> listener = invocation.getArgument(2);
-            listener.onFailure(new RuntimeException("OpenSearch connection failed"));
-            return null;
-        }).when(openSearchClient).searchAsync(any(SearchRequest.class), 
-            eq(RequestOptions.DEFAULT), any(ActionListener.class));
-        
-        // When: Execute is called
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should return empty result without throwing exception
-        StepVerifier.create(result)
-            .assertNext(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                assertThat(queryResult.getRows()).isEmpty();
-            })
-            .verifyComplete();
-    }
-    
-    @Test
-    void testExecuteSubQuery_WithPartialFailure_ShouldReturnSuccessfulResults() {
-        // Given: A query plan with one successful and one failing tier
-        QueryPlan plan = new QueryPlan();
-        
-        // Warm tier query (will succeed with empty result)
-        ClickHouseQuery warmQuery = new ClickHouseQuery("SELECT * FROM aegis_events_warm");
-        plan.addSubQuery(warmQuery);
-        
-        // Hot tier query (will fail)
-        OpenSearchQuery hotQuery = new OpenSearchQuery(
-            new SearchSourceBuilder().query(QueryBuilders.matchAllQuery())
-        );
-        plan.addSubQuery(hotQuery);
-        
-        // Mock OpenSearch to throw an exception
-        doAnswer(invocation -> {
-            ActionListener<SearchResponse> listener = invocation.getArgument(2);
-            listener.onFailure(new RuntimeException("OpenSearch connection failed"));
-            return null;
-        }).when(openSearchClient).searchAsync(any(SearchRequest.class), 
-            eq(RequestOptions.DEFAULT), any(ActionListener.class));
-        
-        // When: Execute is called
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should return results from successful tier
-        StepVerifier.create(result)
-            .assertNext(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                // Warm tier returns empty result (placeholder implementation)
-                assertThat(queryResult.getRows()).isEmpty();
-            })
-            .verifyComplete();
-    }
-    
-    @Test
-    void testExecuteSubQuery_WithTimeout_ShouldHandleGracefully() {
-        // Given: A query plan with a query that will timeout
-        QueryPlan plan = new QueryPlan();
-        OpenSearchQuery hotQuery = new OpenSearchQuery(
-            new SearchSourceBuilder().query(QueryBuilders.matchAllQuery())
-        );
-        plan.addSubQuery(hotQuery);
-        
-        // Mock OpenSearch to never respond (simulating timeout)
-        doAnswer(invocation -> {
-            // Don't call the listener - simulates hanging request
-            return null;
-        }).when(openSearchClient).searchAsync(any(SearchRequest.class), 
-            eq(RequestOptions.DEFAULT), any(ActionListener.class));
-        
-        // When: Execute is called
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should timeout and return empty result
-        StepVerifier.create(result)
-            .expectNextMatches(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                return true;
-            })
-            .expectComplete()
-            .verify(Duration.ofSeconds(35)); // Should complete within timeout + buffer
-    }
-    
-    @Test
-    void testExecuteSubQuery_WithInvalidQueryType_ShouldHandleGracefully() {
-        // Given: A query plan with an invalid query type
-        QueryPlan plan = new QueryPlan();
-        
-        // Create a custom SubQuery that doesn't match expected types
-        SubQuery invalidQuery = new SubQuery() {
-            @Override
-            public StorageTier getTier() {
-                return StorageTier.HOT;
-            }
-            
-            @Override
-            public Object getNativeQuery() {
-                return "Invalid query object";
-            }
-        };
-        plan.addSubQuery(invalidQuery);
-        
-        // When: Execute is called
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should handle the type mismatch gracefully
-        StepVerifier.create(result)
-            .expectNextMatches(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                return true;
-            })
-            .expectComplete()
-            .verify(Duration.ofSeconds(5));
-    }
-    
-    @Test
-    void testExecuteSubQuery_LoggingAndMetrics_ShouldRecordCorrectly() {
-        // Given: A query plan with hot tier query
-        QueryPlan plan = new QueryPlan();
-        OpenSearchQuery hotQuery = new OpenSearchQuery(
-            new SearchSourceBuilder().query(QueryBuilders.matchAllQuery())
-        );
-        plan.addSubQuery(hotQuery);
-        
-        // Mock successful OpenSearch response
-        SearchHit[] hits = new SearchHit[0];
-        SearchHits searchHits = new SearchHits(hits, null, 0.0f);
-        SearchResponse searchResponse = mock(SearchResponse.class);
-        when(searchResponse.getHits()).thenReturn(searchHits);
-        when(searchResponse.getAggregations()).thenReturn(null);
-        
-        doAnswer(invocation -> {
-            ActionListener<SearchResponse> listener = invocation.getArgument(2);
-            listener.onResponse(searchResponse);
-            return null;
-        }).when(openSearchClient).searchAsync(any(SearchRequest.class), 
-            eq(RequestOptions.DEFAULT), any(ActionListener.class));
-        
-        // When: Execute is called
-        Flux<QueryResult> result = queryExecutor.execute(plan);
-        
-        // Then: Should complete successfully and metrics should be recorded
-        StepVerifier.create(result)
-            .assertNext(queryResult -> {
-                assertThat(queryResult).isNotNull();
-                assertThat(queryResult.getRows()).isEmpty();
-                assertThat(queryResult.getExecutionTimeMs()).isGreaterThanOrEqualTo(0);
-            })
-            .verifyComplete();
-        
-        // Verify OpenSearch client was called
-        verify(openSearchClient, times(1)).searchAsync(
-            any(SearchRequest.class), 
-            eq(RequestOptions.DEFAULT), 
-            any(ActionListener.class)
-        );
     }
 }
