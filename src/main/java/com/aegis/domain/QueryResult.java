@@ -36,11 +36,23 @@ public class QueryResult {
     @JsonProperty("execution_time_ms")
     private long executionTimeMs;
     
+    @JsonProperty("timed_out")
+    private boolean timedOut;
+    
+    @JsonProperty("partial_results")
+    private boolean partialResults;
+    
+    @JsonProperty("cached")
+    private boolean cached;
+    
     /**
      * Default constructor
      */
     public QueryResult() {
         this.rows = new ArrayList<>();
+        this.timedOut = false;
+        this.partialResults = false;
+        this.cached = false;
     }
     
     /**
@@ -124,6 +136,30 @@ public class QueryResult {
     
     public void setExecutionTimeMs(long executionTimeMs) {
         this.executionTimeMs = executionTimeMs;
+    }
+    
+    public boolean isTimedOut() {
+        return timedOut;
+    }
+    
+    public void setTimedOut(boolean timedOut) {
+        this.timedOut = timedOut;
+    }
+    
+    public boolean isPartialResults() {
+        return partialResults;
+    }
+    
+    public void setPartialResults(boolean partialResults) {
+        this.partialResults = partialResults;
+    }
+    
+    public boolean isCached() {
+        return cached;
+    }
+    
+    public void setCached(boolean cached) {
+        this.cached = cached;
     }
     
     /**

@@ -50,6 +50,9 @@ class QueryExecutorTest {
     private JdbcTemplate clickHouseTemplate;
     
     @Mock
+    private QueryMetrics metrics;
+    
+    @Mock
     private SearchResponse searchResponse;
     
     @Mock
@@ -59,7 +62,7 @@ class QueryExecutorTest {
     
     @BeforeEach
     void setUp() {
-        queryExecutor = new QueryExecutor(openSearchClient, clickHouseTemplate);
+        queryExecutor = new QueryExecutor(openSearchClient, clickHouseTemplate, metrics);
     }
     
     // ========== Constructor Tests ==========
@@ -352,6 +355,255 @@ class QueryExecutorTest {
         StepVerifier.create(result)
             .expectTimeout(Duration.ofSeconds(35)) // Slightly more than 30s timeout
             .verify();
+    }
+    
+    // ========== ClickHouse Execution Tests ==========
+    
+    @Test
+    void testExecuteClickHouse_WithNullQuery_ShouldReturnEmptyResult() {
+        // Given: A null ClickHouse query
+        ClickHouseQuery query = null;
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should return empty result
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).isEmpty();
+            })
+            .verifyComplete();
+    }
+    
+    @Test
+    void testExecuteClickHouse_WithEmptySQL_ShouldReturnEmptyResult() {
+        // Given: A ClickHouse query with empty SQL
+        ClickHouseQuery query = new ClickHouseQuery("");
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should return empty result
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).isEmpty();
+            })
+            .verifyComplete();
+    }
+    
+    @Test
+    void testExecuteClickHouse_WithValidQuery_ShouldReturnResults() {
+        // Given: A valid ClickHouse query
+        String sql = "SELECT time, severity, message FROM aegis_events_warm WHERE severity >= 3";
+        ClickHouseQuery query = new ClickHouseQuery(sql);
+        
+        // Mock JDBC template to return results
+        when(clickHouseTemplate.query(eq(sql), any(org.springframework.jdbc.core.ResultSetExtractor.class)))
+            .thenAnswer(invocation -> {
+                org.springframework.jdbc.core.ResultSetExtractor<?> extractor = invocation.getArgument(1);
+                
+                // Create mock ResultSet
+                java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+                java.sql.ResultSetMetaData metaData = mock(java.sql.ResultSetMetaData.class);
+                
+                // Configure metadata
+                when(metaData.getColumnCount()).thenReturn(3);
+                when(metaData.getColumnLabel(1)).thenReturn("time");
+                when(metaData.getColumnLabel(2)).thenReturn("severity");
+                when(metaData.getColumnLabel(3)).thenReturn("message");
+                when(rs.getMetaData()).thenReturn(metaData);
+                
+                // Configure result set to return 2 rows
+                when(rs.next()).thenReturn(true, true, false);
+                
+                // First row
+                when(rs.getObject(1)).thenReturn(
+                    java.sql.Timestamp.valueOf("2022-05-15 10:00:00"),
+                    java.sql.Timestamp.valueOf("2022-05-15 10:05:00")
+                );
+                when(rs.getObject(2)).thenReturn(3, 4);
+                when(rs.getObject(3)).thenReturn("Test event 1", "Test event 2");
+                
+                return extractor.extractData(rs);
+            });
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should return results from ClickHouse
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).hasSize(2);
+                assertThat(queryResult.getTotalCount()).isEqualTo(2);
+                assertThat(queryResult.getStorageTier()).isEqualTo(StorageTier.WARM);
+                assertThat(queryResult.getExecutionTimeMs()).isGreaterThanOrEqualTo(0);
+                
+                // Verify first row
+                Map<String, Object> row1 = queryResult.getRows().get(0);
+                assertThat(row1.get("time")).isNotNull();
+                assertThat(row1.get("severity")).isEqualTo(3);
+                assertThat(row1.get("message")).isEqualTo("Test event 1");
+                
+                // Verify second row
+                Map<String, Object> row2 = queryResult.getRows().get(1);
+                assertThat(row2.get("severity")).isEqualTo(4);
+                assertThat(row2.get("message")).isEqualTo("Test event 2");
+            })
+            .verifyComplete();
+        
+        // Verify JDBC template was called
+        verify(clickHouseTemplate).query(eq(sql), any(org.springframework.jdbc.core.ResultSetExtractor.class));
+    }
+    
+    @Test
+    void testExecuteClickHouse_WithAggregationQuery_ShouldReturnAggregatedResults() {
+        // Given: An aggregation query
+        String sql = "SELECT severity, COUNT(*) as count FROM aegis_events_warm GROUP BY severity";
+        ClickHouseQuery query = new ClickHouseQuery(sql);
+        
+        // Mock JDBC template to return aggregated results
+        when(clickHouseTemplate.query(eq(sql), any(org.springframework.jdbc.core.ResultSetExtractor.class)))
+            .thenAnswer(invocation -> {
+                org.springframework.jdbc.core.ResultSetExtractor<?> extractor = invocation.getArgument(1);
+                
+                // Create mock ResultSet
+                java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+                java.sql.ResultSetMetaData metaData = mock(java.sql.ResultSetMetaData.class);
+                
+                // Configure metadata
+                when(metaData.getColumnCount()).thenReturn(2);
+                when(metaData.getColumnLabel(1)).thenReturn("severity");
+                when(metaData.getColumnLabel(2)).thenReturn("count");
+                when(rs.getMetaData()).thenReturn(metaData);
+                
+                // Configure result set to return 3 rows (one per severity level)
+                when(rs.next()).thenReturn(true, true, true, false);
+                when(rs.getObject(1)).thenReturn(3, 4, 5);
+                when(rs.getObject(2)).thenReturn(100L, 50L, 25L);
+                
+                return extractor.extractData(rs);
+            });
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should return aggregated results
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).hasSize(3);
+                assertThat(queryResult.getTotalCount()).isEqualTo(3);
+                
+                // Verify aggregation rows
+                Map<String, Object> row1 = queryResult.getRows().get(0);
+                assertThat(row1.get("severity")).isEqualTo(3);
+                assertThat(row1.get("count")).isEqualTo(100L);
+            })
+            .verifyComplete();
+    }
+    
+    @Test
+    void testExecuteClickHouse_WithError_ShouldReturnEmptyResult() {
+        // Given: A query that will fail
+        String sql = "SELECT * FROM non_existent_table";
+        ClickHouseQuery query = new ClickHouseQuery(sql);
+        
+        // Mock JDBC template to throw exception
+        when(clickHouseTemplate.query(eq(sql), any(org.springframework.jdbc.core.ResultSetExtractor.class)))
+            .thenThrow(new org.springframework.dao.DataAccessException("Table not found") {});
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should return empty result with error handling
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).isEmpty();
+                assertThat(queryResult.getStorageTier()).isEqualTo(StorageTier.WARM);
+            })
+            .verifyComplete();
+    }
+    
+    @Test
+    void testExecuteClickHouse_WithSpecialTypes_ShouldConvertProperly() {
+        // Given: A query returning various SQL types
+        String sql = "SELECT time, date, array_field FROM aegis_events_warm";
+        ClickHouseQuery query = new ClickHouseQuery(sql);
+        
+        // Mock JDBC template to return special types
+        when(clickHouseTemplate.query(eq(sql), any(org.springframework.jdbc.core.ResultSetExtractor.class)))
+            .thenAnswer(invocation -> {
+                org.springframework.jdbc.core.ResultSetExtractor<?> extractor = invocation.getArgument(1);
+                
+                // Create mock ResultSet
+                java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+                java.sql.ResultSetMetaData metaData = mock(java.sql.ResultSetMetaData.class);
+                
+                // Configure metadata
+                when(metaData.getColumnCount()).thenReturn(3);
+                when(metaData.getColumnLabel(1)).thenReturn("time");
+                when(metaData.getColumnLabel(2)).thenReturn("date");
+                when(metaData.getColumnLabel(3)).thenReturn("array_field");
+                when(rs.getMetaData()).thenReturn(metaData);
+                
+                // Configure result set to return 1 row with special types
+                when(rs.next()).thenReturn(true, false);
+                
+                java.sql.Timestamp timestamp = java.sql.Timestamp.valueOf("2022-05-15 10:00:00");
+                java.sql.Date date = java.sql.Date.valueOf("2022-05-15");
+                java.sql.Array array = mock(java.sql.Array.class);
+                when(array.getArray()).thenReturn(new String[]{"value1", "value2"});
+                
+                when(rs.getObject(1)).thenReturn(timestamp);
+                when(rs.getObject(2)).thenReturn(date);
+                when(rs.getObject(3)).thenReturn(array);
+                
+                return extractor.extractData(rs);
+            });
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should convert special types properly
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).hasSize(1);
+                
+                Map<String, Object> row = queryResult.getRows().get(0);
+                
+                // Timestamp should be converted to ISO 8601 string
+                assertThat(row.get("time")).isInstanceOf(String.class);
+                assertThat(row.get("time").toString()).contains("2022-05-15");
+                
+                // Date should be converted to string
+                assertThat(row.get("date")).isInstanceOf(String.class);
+                assertThat(row.get("date")).isEqualTo("2022-05-15");
+                
+                // Array should be converted to Java array
+                assertThat(row.get("array_field")).isInstanceOf(Object[].class);
+            })
+            .verifyComplete();
     }
     
     // ========== Multi-Tier Tests ==========
