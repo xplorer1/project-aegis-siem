@@ -218,6 +218,373 @@ public class QueryExecutor {
     }
     
     /**
+     * Execute a query plan with cursor-based pagination support
+     * 
+     * This method extends the basic execute() with pagination:
+     * 1. Validates and normalizes the page size (max 10,000)
+     * 2. Decodes the cursor to determine the starting position
+     * 3. Executes queries across all tiers with pagination parameters
+     * 4. Merges results and generates a new cursor for the next page
+     * 5. Sets hasMore flag if more results are available
+     * 
+     * Cursor format: Base64-encoded JSON containing:
+     * - lastId: The ID of the last record in the current page
+     * - lastTimestamp: The timestamp of the last record (for time-based sorting)
+     * - offset: The current offset (for fallback pagination)
+     * - tier: The storage tier of the last record
+     * 
+     * For large result sets (>10,000 records), cursor-based pagination is more
+     * efficient than offset-based pagination as it doesn't require scanning
+     * all previous records.
+     * 
+     * @param plan The query execution plan
+     * @param cursor The pagination cursor (null for first page)
+     * @param pageSize The number of results per page (max 10,000)
+     * @return A Flux emitting the paginated query result
+     */
+    public Flux<QueryResult> executeWithPagination(QueryPlan plan, String cursor, int pageSize) {
+        if (plan == null || plan.isEmpty()) {
+            log.debug("Empty or null query plan, returning empty result");
+            return Flux.just(new QueryResult());
+        }
+        
+        // Validate and normalize page size
+        int normalizedPageSize = Math.min(Math.max(pageSize, 1), MAX_PAGE_SIZE);
+        if (pageSize != normalizedPageSize) {
+            log.debug("Normalized page size from {} to {}", pageSize, normalizedPageSize);
+        }
+        
+        // Decode cursor to get pagination state
+        PaginationCursor paginationCursor = decodeCursor(cursor);
+        log.debug("Executing paginated query with cursor: {}, pageSize: {}", 
+            paginationCursor, normalizedPageSize);
+        
+        long startTime = System.currentTimeMillis();
+        
+        // Apply pagination parameters to each sub-query
+        QueryPlan paginatedPlan = applyPaginationToPlan(plan, paginationCursor, normalizedPageSize);
+        
+        // Execute the paginated plan
+        return Flux.fromIterable(paginatedPlan.getSubQueries())
+            .parallel(Math.min(paginatedPlan.size(), MAX_CONCURRENT_QUERIES))
+            .runOn(Schedulers.parallel())
+            .flatMap(subQuery -> executeSubQuery(subQuery)
+                .timeout(DEFAULT_TIMEOUT)
+                .doOnSuccess(result -> log.debug("Paginated sub-query for tier {} completed with {} rows", 
+                    subQuery.getTier(), result.getRows().size()))
+                .onErrorResume(error -> {
+                    log.error("Error executing paginated sub-query for tier {}: {}", 
+                        subQuery.getTier(), error.getMessage(), error);
+                    metrics.recordQueryError();
+                    return Mono.just(new QueryResult());
+                }))
+            .sequential()
+            .reduce(new QueryResult(), this::mergeResults)
+            .map(result -> {
+                long executionTime = System.currentTimeMillis() - startTime;
+                result.setExecutionTimeMs(executionTime);
+                result.setPageSize(normalizedPageSize);
+                
+                // Determine if there are more results
+                // We fetch pageSize + 1 records to check if there's a next page
+                boolean hasMore = result.getRows().size() > normalizedPageSize;
+                result.setHasMore(hasMore);
+                
+                // If we have more results, trim to page size and generate next cursor
+                if (hasMore) {
+                    // Remove the extra record
+                    List<Map<String, Object>> trimmedRows = result.getRows()
+                        .subList(0, normalizedPageSize);
+                    result.setRows(trimmedRows);
+                    
+                    // Generate cursor from the last record
+                    Map<String, Object> lastRecord = trimmedRows.get(trimmedRows.size() - 1);
+                    String nextCursor = generateCursor(lastRecord, paginationCursor.getOffset() + normalizedPageSize);
+                    result.setCursor(nextCursor);
+                    
+                    log.debug("Generated next cursor for pagination: {}", nextCursor);
+                } else {
+                    // No more results
+                    result.setCursor(null);
+                }
+                
+                // Update total count (this is the count for current page)
+                result.setTotalCount(result.getRows().size());
+                
+                log.info("Paginated query execution completed in {}ms with {} rows (hasMore: {})", 
+                    executionTime, result.getTotalCount(), hasMore);
+                
+                return result;
+            })
+            .flatMapMany(Flux::just);
+    }
+    
+    /**
+     * Decode a pagination cursor
+     * 
+     * The cursor is a Base64-encoded JSON object containing:
+     * - lastId: The ID of the last record
+     * - lastTimestamp: The timestamp of the last record
+     * - offset: The current offset
+     * - tier: The storage tier
+     * 
+     * @param cursor The encoded cursor string (null for first page)
+     * @return A PaginationCursor object
+     */
+    private PaginationCursor decodeCursor(String cursor) {
+        if (cursor == null || cursor.isEmpty()) {
+            return new PaginationCursor();
+        }
+        
+        try {
+            byte[] decodedBytes = Base64.getDecoder().decode(cursor);
+            String decodedJson = new String(decodedBytes, StandardCharsets.UTF_8);
+            
+            Map<String, Object> cursorData = objectMapper.readValue(
+                decodedJson, 
+                new TypeReference<Map<String, Object>>() {}
+            );
+            
+            PaginationCursor paginationCursor = new PaginationCursor();
+            paginationCursor.setLastId((String) cursorData.get("lastId"));
+            paginationCursor.setLastTimestamp((String) cursorData.get("lastTimestamp"));
+            paginationCursor.setOffset(((Number) cursorData.getOrDefault("offset", 0)).intValue());
+            
+            String tierName = (String) cursorData.get("tier");
+            if (tierName != null) {
+                paginationCursor.setTier(StorageTier.valueOf(tierName));
+            }
+            
+            log.debug("Decoded cursor: {}", paginationCursor);
+            return paginationCursor;
+            
+        } catch (Exception e) {
+            log.warn("Failed to decode cursor: {} - starting from beginning", cursor, e);
+            return new PaginationCursor();
+        }
+    }
+    
+    /**
+     * Generate a pagination cursor from the last record
+     * 
+     * @param lastRecord The last record in the current page
+     * @param offset The current offset
+     * @return A Base64-encoded cursor string
+     */
+    private String generateCursor(Map<String, Object> lastRecord, int offset) {
+        try {
+            Map<String, Object> cursorData = new ConcurrentHashMap<>();
+            cursorData.put("lastId", lastRecord.get("_id"));
+            cursorData.put("lastTimestamp", lastRecord.get("time"));
+            cursorData.put("offset", offset);
+            
+            // Include tier if available
+            if (lastRecord.containsKey("_tier")) {
+                cursorData.put("tier", lastRecord.get("_tier"));
+            }
+            
+            String cursorJson = objectMapper.writeValueAsString(cursorData);
+            String encodedCursor = Base64.getEncoder()
+                .encodeToString(cursorJson.getBytes(StandardCharsets.UTF_8));
+            
+            log.trace("Generated cursor: {} from data: {}", encodedCursor, cursorData);
+            return encodedCursor;
+            
+        } catch (Exception e) {
+            log.error("Failed to generate cursor from record: {}", lastRecord, e);
+            // Return a simple offset-based cursor as fallback
+            String fallbackCursor = Base64.getEncoder()
+                .encodeToString(String.format("{\"offset\":%d}", offset)
+                    .getBytes(StandardCharsets.UTF_8));
+            return fallbackCursor;
+        }
+    }
+    
+    /**
+     * Apply pagination parameters to a query plan
+     * 
+     * This method modifies each sub-query in the plan to include:
+     * - LIMIT clause with pageSize + 1 (to detect if there are more results)
+     * - Search_after or offset parameters based on the cursor
+     * 
+     * @param plan The original query plan
+     * @param cursor The pagination cursor
+     * @param pageSize The page size
+     * @return A new query plan with pagination applied
+     */
+    private QueryPlan applyPaginationToPlan(QueryPlan plan, PaginationCursor cursor, int pageSize) {
+        QueryPlan paginatedPlan = new QueryPlan();
+        
+        for (SubQuery subQuery : plan.getSubQueries()) {
+            SubQuery paginatedSubQuery = applyPaginationToSubQuery(subQuery, cursor, pageSize);
+            paginatedPlan.addSubQuery(paginatedSubQuery);
+        }
+        
+        return paginatedPlan;
+    }
+    
+    /**
+     * Apply pagination to a single sub-query
+     * 
+     * For OpenSearch queries: Use search_after API for cursor-based pagination
+     * For ClickHouse queries: Use LIMIT and OFFSET
+     * For Cold tier queries: Use Spark DataFrame limit and offset
+     * 
+     * @param subQuery The original sub-query
+     * @param cursor The pagination cursor
+     * @param pageSize The page size
+     * @return A paginated sub-query
+     */
+    private SubQuery applyPaginationToSubQuery(SubQuery subQuery, PaginationCursor cursor, int pageSize) {
+        StorageTier tier = subQuery.getTier();
+        
+        // Fetch pageSize + 1 to detect if there are more results
+        int fetchSize = pageSize + 1;
+        
+        switch (tier) {
+            case HOT:
+                return applyPaginationToOpenSearch((OpenSearchQuery) subQuery, cursor, fetchSize);
+            case WARM:
+                return applyPaginationToClickHouse((ClickHouseQuery) subQuery, cursor, fetchSize);
+            case COLD:
+                return applyPaginationToCold(subQuery, cursor, fetchSize);
+            default:
+                log.warn("Unknown tier: {} - returning original sub-query", tier);
+                return subQuery;
+        }
+    }
+    
+    /**
+     * Apply pagination to an OpenSearch query using search_after
+     * 
+     * @param query The OpenSearch query
+     * @param cursor The pagination cursor
+     * @param fetchSize The number of records to fetch
+     * @return A paginated OpenSearch query
+     */
+    private OpenSearchQuery applyPaginationToOpenSearch(
+            OpenSearchQuery query, PaginationCursor cursor, int fetchSize) {
+        
+        org.opensearch.search.builder.SearchSourceBuilder sourceBuilder = 
+            query.getSearchSourceBuilder();
+        
+        // Set size
+        sourceBuilder.size(fetchSize);
+        
+        // Apply search_after if we have a cursor
+        if (cursor.getLastId() != null && cursor.getLastTimestamp() != null) {
+            // Use search_after with [timestamp, _id] for stable sorting
+            Object[] searchAfter = new Object[]{cursor.getLastTimestamp(), cursor.getLastId()};
+            sourceBuilder.searchAfter(searchAfter);
+            
+            log.debug("Applied search_after to OpenSearch query: {}", (Object) searchAfter);
+        }
+        
+        // Ensure we have a sort order for consistent pagination
+        if (sourceBuilder.sorts() == null || sourceBuilder.sorts().isEmpty()) {
+            sourceBuilder.sort("time", org.opensearch.search.sort.SortOrder.DESC);
+            sourceBuilder.sort("_id", org.opensearch.search.sort.SortOrder.ASC);
+        }
+        
+        return query;
+    }
+    
+    /**
+     * Apply pagination to a ClickHouse query using LIMIT and OFFSET
+     * 
+     * @param query The ClickHouse query
+     * @param cursor The pagination cursor
+     * @param fetchSize The number of records to fetch
+     * @return A paginated ClickHouse query
+     */
+    private ClickHouseQuery applyPaginationToClickHouse(
+            ClickHouseQuery query, PaginationCursor cursor, int fetchSize) {
+        
+        String sql = query.getSql();
+        int offset = cursor.getOffset();
+        
+        // Add LIMIT and OFFSET to the SQL query
+        // Remove existing LIMIT if present
+        sql = sql.replaceAll("(?i)\\s+LIMIT\\s+\\d+", "");
+        
+        // Add new LIMIT and OFFSET
+        sql = sql + String.format(" LIMIT %d OFFSET %d", fetchSize, offset);
+        
+        log.debug("Applied pagination to ClickHouse query: LIMIT {} OFFSET {}", fetchSize, offset);
+        
+        // Create a new query instance with the modified SQL
+        return new ClickHouseQuery(sql);
+    }
+    
+    /**
+     * Apply pagination to a cold tier query
+     * 
+     * This is a placeholder for future implementation when Spark integration is added.
+     * 
+     * @param query The cold tier query
+     * @param cursor The pagination cursor
+     * @param fetchSize The number of records to fetch
+     * @return A paginated cold tier query
+     */
+    private SubQuery applyPaginationToCold(SubQuery query, PaginationCursor cursor, int fetchSize) {
+        // Placeholder - will be implemented when Spark integration is added
+        log.debug("Cold tier pagination not yet implemented - returning original query");
+        return query;
+    }
+    
+    /**
+     * Inner class to represent pagination cursor state
+     */
+    private static class PaginationCursor {
+        private String lastId;
+        private String lastTimestamp;
+        private int offset;
+        private StorageTier tier;
+        
+        public PaginationCursor() {
+            this.offset = 0;
+        }
+        
+        public String getLastId() {
+            return lastId;
+        }
+        
+        public void setLastId(String lastId) {
+            this.lastId = lastId;
+        }
+        
+        public String getLastTimestamp() {
+            return lastTimestamp;
+        }
+        
+        public void setLastTimestamp(String lastTimestamp) {
+            this.lastTimestamp = lastTimestamp;
+        }
+        
+        public int getOffset() {
+            return offset;
+        }
+        
+        public void setOffset(int offset) {
+            this.offset = offset;
+        }
+        
+        public StorageTier getTier() {
+            return tier;
+        }
+        
+        public void setTier(StorageTier tier) {
+            this.tier = tier;
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("PaginationCursor{lastId='%s', lastTimestamp='%s', offset=%d, tier=%s}",
+                lastId, lastTimestamp, offset, tier);
+        }
+    }
+    
+    /**
      * Generate a cache key from a query plan
      * 
      * The cache key is generated by combining:
