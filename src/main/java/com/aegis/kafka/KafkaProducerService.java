@@ -83,4 +83,18 @@ public class KafkaProducerService {
     public CompletableFuture<SendResult<String, Object>> send(String topic, Object value) {
         return send(topic, null, value);
     }
+    
+    /**
+     * Send normalized event to normalized-events topic
+     */
+    public CompletableFuture<SendResult<String, Object>> sendNormalizedEvent(Object event) {
+        return send("normalized-events", event);
+    }
+    
+    /**
+     * Send failed event to dead letter queue
+     */
+    public CompletableFuture<SendResult<String, Object>> sendToDeadLetterQueue(Object deadLetter) {
+        return send("dead-letter-queue", deadLetter);
+    }
 }
