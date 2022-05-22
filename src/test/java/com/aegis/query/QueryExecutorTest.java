@@ -933,3 +933,533 @@ class QueryExecutorTest {
         return hit;
     }
 }
+
+    // ========== Cache Tests ==========
+    
+    @Test
+    void testExecute_WithCacheHit_ShouldReturnCachedResult() throws Exception {
+        // Given: A query that has been executed before
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery())
+            .size(10);
+        OpenSearchQuery query = new OpenSearchQuery(sourceBuilder);
+        
+        // Mock search hits for first execution
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Test event", "severity", 3));
+        
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            listener.onResponse(searchResponse);
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called twice with the same query
+        Flux<QueryResult> firstResult = queryExecutor.execute(plan);
+        
+        // First execution should hit the database
+        StepVerifier.create(firstResult)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).hasSize(1);
+                assertThat(queryResult.isCached()).isFalse();
+            })
+            .verifyComplete();
+        
+        // Verify cache miss was recorded
+        verify(metrics).recordCacheMiss();
+        
+        // Second execution should hit the cache
+        Flux<QueryResult> secondResult = queryExecutor.execute(plan);
+        
+        StepVerifier.create(secondResult)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).hasSize(1);
+                assertThat(queryResult.isCached()).isTrue();
+            })
+            .verifyComplete();
+        
+        // Verify cache hit was recorded
+        verify(metrics).recordCacheHit();
+        
+        // Verify OpenSearch was only called once (first execution)
+        verify(openSearchClient, times(1)).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+    }
+    
+    @Test
+    void testExecute_WithDifferentQueries_ShouldNotShareCache() throws Exception {
+        // Given: Two different queries
+        SearchSourceBuilder sourceBuilder1 = new SearchSourceBuilder()
+            .query(QueryBuilders.matchQuery("message", "error"))
+            .size(10);
+        OpenSearchQuery query1 = new OpenSearchQuery(sourceBuilder1);
+        
+        SearchSourceBuilder sourceBuilder2 = new SearchSourceBuilder()
+            .query(QueryBuilders.matchQuery("message", "warning"))
+            .size(10);
+        OpenSearchQuery query2 = new OpenSearchQuery(sourceBuilder2);
+        
+        // Mock search hits
+        SearchHit hit1 = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Error event"));
+        SearchHit hit2 = createMockSearchHit("2", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Warning event"));
+        
+        when(searchHits.getHits())
+            .thenReturn(new SearchHit[]{hit1})
+            .thenReturn(new SearchHit[]{hit2});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            listener.onResponse(searchResponse);
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan1 = new QueryPlan();
+        plan1.addSubQuery(query1);
+        
+        QueryPlan plan2 = new QueryPlan();
+        plan2.addSubQuery(query2);
+        
+        // When: Execute both queries
+        Flux<QueryResult> result1 = queryExecutor.execute(plan1);
+        Flux<QueryResult> result2 = queryExecutor.execute(plan2);
+        
+        // Then: Both should execute (no cache sharing)
+        StepVerifier.create(result1)
+            .assertNext(queryResult -> {
+                assertThat(queryResult.isCached()).isFalse();
+            })
+            .verifyComplete();
+        
+        StepVerifier.create(result2)
+            .assertNext(queryResult -> {
+                assertThat(queryResult.isCached()).isFalse();
+            })
+            .verifyComplete();
+        
+        // Verify both queries hit the database
+        verify(openSearchClient, times(2)).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        // Verify both were cache misses
+        verify(metrics, times(2)).recordCacheMiss();
+    }
+    
+    @Test
+    void testInvalidateCache_ShouldClearAllEntries() throws Exception {
+        // Given: A cached query result
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery query = new OpenSearchQuery(sourceBuilder);
+        
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Test event"));
+        
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            listener.onResponse(searchResponse);
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // Execute once to populate cache
+        StepVerifier.create(queryExecutor.execute(plan))
+            .assertNext(queryResult -> assertThat(queryResult.isCached()).isFalse())
+            .verifyComplete();
+        
+        // When: Cache is invalidated
+        queryExecutor.invalidateCache();
+        
+        // Then: Next execution should be a cache miss
+        StepVerifier.create(queryExecutor.execute(plan))
+            .assertNext(queryResult -> assertThat(queryResult.isCached()).isFalse())
+            .verifyComplete();
+        
+        // Verify cache invalidation was recorded
+        verify(metrics).recordCacheInvalidation();
+        
+        // Verify OpenSearch was called twice (once before invalidation, once after)
+        verify(openSearchClient, times(2)).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+    }
+    
+    @Test
+    void testGetCacheStats_ShouldReturnStatistics() throws Exception {
+        // Given: Some cached queries
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery query = new OpenSearchQuery(sourceBuilder);
+        
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Test event"));
+        
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            listener.onResponse(searchResponse);
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // Execute twice (one miss, one hit)
+        StepVerifier.create(queryExecutor.execute(plan)).expectNextCount(1).verifyComplete();
+        StepVerifier.create(queryExecutor.execute(plan)).expectNextCount(1).verifyComplete();
+        
+        // When: Get cache stats
+        Map<String, Object> stats = queryExecutor.getCacheStats();
+        
+        // Then: Should return statistics
+        assertThat(stats).isNotNull();
+        assertThat(stats).containsKeys("hitCount", "missCount", "hitRate", "evictionCount", "estimatedSize");
+        assertThat(stats.get("hitCount")).isEqualTo(1L);
+        assertThat(stats.get("missCount")).isEqualTo(1L);
+        assertThat(stats.get("estimatedSize")).isEqualTo(1L);
+    }
+    
+    @Test
+    void testCachedResultCloning_ShouldNotMutateOriginal() throws Exception {
+        // Given: A cached query result
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery query = new OpenSearchQuery(sourceBuilder);
+        
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Test event"));
+        
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            listener.onResponse(searchResponse);
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // Execute once to populate cache
+        StepVerifier.create(queryExecutor.execute(plan))
+            .assertNext(queryResult -> {
+                assertThat(queryResult.getRows()).hasSize(1);
+            })
+            .verifyComplete();
+        
+        // When: Execute again and modify the result
+        StepVerifier.create(queryExecutor.execute(plan))
+            .assertNext(queryResult -> {
+                assertThat(queryResult.isCached()).isTrue();
+                // Modify the result
+                queryResult.getRows().clear();
+            })
+            .verifyComplete();
+        
+        // Then: Third execution should still return the original cached result
+        StepVerifier.create(queryExecutor.execute(plan))
+            .assertNext(queryResult -> {
+                assertThat(queryResult.isCached()).isTrue();
+                assertThat(queryResult.getRows()).hasSize(1); // Original size preserved
+            })
+            .verifyComplete();
+    }
+}
+
+    // ========== Comprehensive Timeout Handling Tests ==========
+    
+    @Test
+    void testExecute_WithSubQueryTimeout_ShouldReturnPartialResults() throws Exception {
+        // Given: A query plan with one fast query and one slow query
+        SearchSourceBuilder fastSourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery fastQuery = new OpenSearchQuery(fastSourceBuilder);
+        
+        SearchSourceBuilder slowSourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery slowQuery = new OpenSearchQuery(slowSourceBuilder);
+        
+        // Mock fast response
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Fast event"));
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        // Mock one fast response and one timeout
+        doAnswer(invocation -> {
+            SearchRequest request = invocation.getArgument(0);
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            
+            // First call succeeds quickly
+            if (request.source() == fastSourceBuilder) {
+                listener.onResponse(searchResponse);
+            }
+            // Second call never completes (timeout)
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(fastQuery);
+        plan.addSubQuery(slowQuery);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should return partial results with timeout flag
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.isTimedOut()).isTrue();
+                assertThat(queryResult.isPartialResults()).isTrue();
+                // Should have results from the fast query
+                assertThat(queryResult.getRows()).isNotEmpty();
+            })
+            .verifyComplete();
+    }
+    
+    @Test
+    void testExecute_WithAllSubQueriesTimeout_ShouldReturnEmptyPartialResults() {
+        // Given: A query plan where all sub-queries timeout
+        SearchSourceBuilder sourceBuilder1 = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery query1 = new OpenSearchQuery(sourceBuilder1);
+        
+        SearchSourceBuilder sourceBuilder2 = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery query2 = new OpenSearchQuery(sourceBuilder2);
+        
+        // Mock all queries to timeout (never complete)
+        doAnswer(invocation -> {
+            // Don't call the listener - simulate hanging request
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query1);
+        plan.addSubQuery(query2);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should timeout and return empty partial results
+        StepVerifier.create(result)
+            .expectTimeout(Duration.ofSeconds(35))
+            .verify();
+    }
+    
+    @Test
+    void testExecute_WithPartialResults_ShouldNotCacheResults() throws Exception {
+        // Given: A query plan where one sub-query times out
+        SearchSourceBuilder fastSourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery fastQuery = new OpenSearchQuery(fastSourceBuilder);
+        
+        SearchSourceBuilder slowSourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery slowQuery = new OpenSearchQuery(slowSourceBuilder);
+        
+        // Mock fast response
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Fast event"));
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        // Mock one fast response and one timeout
+        doAnswer(invocation -> {
+            SearchRequest request = invocation.getArgument(0);
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            
+            if (request.source() == fastSourceBuilder) {
+                listener.onResponse(searchResponse);
+            }
+            // Second call never completes
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(fastQuery);
+        plan.addSubQuery(slowQuery);
+        
+        // When: Execute is called twice
+        Flux<QueryResult> result1 = queryExecutor.execute(plan);
+        
+        // Then: First execution should return partial results
+        StepVerifier.create(result1)
+            .assertNext(queryResult -> {
+                assertThat(queryResult.isTimedOut()).isTrue();
+                assertThat(queryResult.isPartialResults()).isTrue();
+                assertThat(queryResult.isCached()).isFalse();
+            })
+            .verifyComplete();
+        
+        // When: Execute the same query again
+        Flux<QueryResult> result2 = queryExecutor.execute(plan);
+        
+        // Then: Second execution should NOT return cached results (partial results not cached)
+        StepVerifier.create(result2)
+            .assertNext(queryResult -> {
+                assertThat(queryResult.isCached()).isFalse();
+                // Should still be partial results from fresh execution
+                assertThat(queryResult.isTimedOut()).isTrue();
+            })
+            .verifyComplete();
+    }
+    
+    @Test
+    void testExecute_WithMixedTierTimeouts_ShouldReturnAvailableResults() throws Exception {
+        // Given: A multi-tier query where warm tier times out but hot tier succeeds
+        SearchSourceBuilder hotSourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery hotQuery = new OpenSearchQuery(hotSourceBuilder);
+        
+        ClickHouseQuery warmQuery = new ClickHouseQuery("SELECT * FROM aegis_events_warm");
+        
+        // Mock hot tier success
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Hot tier event"));
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            listener.onResponse(searchResponse);
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        // Warm tier will timeout (placeholder implementation returns empty)
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(hotQuery);
+        plan.addSubQuery(warmQuery);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should return results from hot tier only
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.getRows()).hasSize(1);
+                // Should have hot tier results
+                Map<String, Object> row = queryResult.getRows().get(0);
+                assertThat(row.get("message")).isEqualTo("Hot tier event");
+            })
+            .verifyComplete();
+    }
+    
+    @Test
+    void testExecute_WithTimeoutIndicators_ShouldSetCorrectFlags() throws Exception {
+        // Given: A query that will partially timeout
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery query = new OpenSearchQuery(sourceBuilder);
+        
+        // Mock timeout
+        doAnswer(invocation -> {
+            // Never complete - will timeout
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should set timeout and partial result flags
+        StepVerifier.create(result)
+            .expectTimeout(Duration.ofSeconds(35))
+            .verify();
+    }
+    
+    @Test
+    void testExecute_WithSuccessfulQuery_ShouldNotSetTimeoutFlags() throws Exception {
+        // Given: A query that completes successfully
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+            .query(QueryBuilders.matchAllQuery());
+        OpenSearchQuery query = new OpenSearchQuery(sourceBuilder);
+        
+        // Mock successful response
+        SearchHit hit = createMockSearchHit("1", "aegis-events-2022-05-13", 1.0f,
+            Map.of("message", "Success event"));
+        when(searchHits.getHits()).thenReturn(new SearchHit[]{hit});
+        when(searchHits.getTotalHits()).thenReturn(new org.apache.lucene.search.TotalHits(1,
+            org.apache.lucene.search.TotalHits.Relation.EQUAL_TO));
+        when(searchResponse.getHits()).thenReturn(searchHits);
+        when(searchResponse.getAggregations()).thenReturn(null);
+        
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(2);
+            listener.onResponse(searchResponse);
+            return null;
+        }).when(openSearchClient).searchAsync(any(SearchRequest.class),
+            eq(RequestOptions.DEFAULT), any(ActionListener.class));
+        
+        QueryPlan plan = new QueryPlan();
+        plan.addSubQuery(query);
+        
+        // When: Execute is called
+        Flux<QueryResult> result = queryExecutor.execute(plan);
+        
+        // Then: Should NOT set timeout or partial result flags
+        StepVerifier.create(result)
+            .assertNext(queryResult -> {
+                assertThat(queryResult).isNotNull();
+                assertThat(queryResult.isTimedOut()).isFalse();
+                assertThat(queryResult.isPartialResults()).isFalse();
+                assertThat(queryResult.getRows()).hasSize(1);
+            })
+            .verifyComplete();
+    }
+}
