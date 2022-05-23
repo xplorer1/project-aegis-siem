@@ -34,3 +34,21 @@ aegis:
   ratelimit:
     capacity: 10000
     refill-rate: 1000
+  flink:
+    # Parallelism: number of parallel operator instances
+    # Should be set based on available CPU cores (typically 2x cores)
+    parallelism: 4
+    # Maximum parallelism for future scaling without state loss
+    max-parallelism: 128
+    # Checkpoint interval in milliseconds (1 minute)
+    checkpoint-interval: 60000
+    # Checkpoint timeout in milliseconds (10 minutes)
+    checkpoint-timeout: 600000
+    # Minimum pause between checkpoints in milliseconds (30 seconds)
+    min-pause-between-checkpoints: 30000
+    # Checkpoint storage directory
+    checkpoint-dir: file:///tmp/flink-checkpoints
+    # Restart strategy: number of attempts
+    restart-attempts: 3
+    # Restart strategy: delay between attempts in milliseconds
+    restart-delay: 10000

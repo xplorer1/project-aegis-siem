@@ -85,6 +85,24 @@ aegis:
     hot-tier-retention-days: 7
     warm-tier-retention-days: 90
     cold-tier-retention-years: 7
+  flink:
+    # Production parallelism: higher for distributed processing
+    # Should match available CPU cores across cluster
+    parallelism: 16
+    # Maximum parallelism for horizontal scaling
+    max-parallelism: 256
+    # Checkpoint interval in milliseconds (1 minute)
+    checkpoint-interval: 60000
+    # Checkpoint timeout in milliseconds (10 minutes)
+    checkpoint-timeout: 600000
+    # Minimum pause between checkpoints in milliseconds (30 seconds)
+    min-pause-between-checkpoints: 30000
+    # Checkpoint storage directory (should be distributed filesystem in production)
+    checkpoint-dir: ${FLINK_CHECKPOINT_DIR:hdfs:///flink/checkpoints}
+    # Restart strategy: more attempts in production
+    restart-attempts: 5
+    # Restart strategy: delay between attempts in milliseconds
+    restart-delay: 30000
 
 # Management and monitoring
 management:
