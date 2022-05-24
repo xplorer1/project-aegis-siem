@@ -1,14 +1,18 @@
 package com.aegis.correlation;
 
+import com.aegis.domain.Alert;
 import com.aegis.domain.OcsfEvent;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.CheckpointingMode;
@@ -60,6 +64,9 @@ public class FlinkJobConfig {
 
     @Value("${aegis.kafka.normalized-events-topic:normalized-events}")
     private String normalizedEventsTopic;
+
+    @Value("${aegis.kafka.alerts-topic:alerts}")
+    private String alertsTopic;
 
     @Value("${aegis.kafka.consumer-group:aegis-correlation-engine}")
     private String consumerGroup;
@@ -261,5 +268,70 @@ public class FlinkJobConfig {
         return WatermarkStrategy
             .<OcsfEvent>forBoundedOutOfOrderness(Duration.ofSeconds(5))
             .withTimestampAssigner((event, timestamp) -> event.getTime().toEpochMilli());
+    }
+
+    /**
+     * Creates a KafkaSink for producing alerts to Kafka.
+     * 
+     * The sink is configured with:
+     * - JSON serialization for Alert objects
+     * - At-least-once delivery guarantees with idempotent producer
+     * - Automatic producer configuration for high throughput
+     * - Idempotent writes to prevent duplicate alerts
+     * 
+     * @return configured KafkaSink for Alert stream
+     */
+    @Bean
+    public KafkaSink<Alert> kafkaSink() {
+        return KafkaSink.<Alert>builder()
+            // Set Kafka bootstrap servers
+            .setBootstrapServers(bootstrapServers)
+            
+            // Set the serialization schema for converting Alert objects to Kafka records
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(alertsTopic)
+                .setValueSerializationSchema(new AlertSerializationSchema())
+                .build())
+            
+            // Configure producer properties for optimal performance and reliability
+            .setProperty("compression.type", "lz4")
+            .setProperty("batch.size", "65536")  // 64KB batches
+            .setProperty("linger.ms", "10")      // Small delay for batching
+            .setProperty("acks", "all")          // Wait for all replicas
+            .setProperty("enable.idempotence", "true")  // Idempotent producer
+            .setProperty("max.in.flight.requests.per.connection", "5")
+            
+            .build();
+    }
+
+    /**
+     * Custom serialization schema for Alert objects.
+     * Uses Jackson ObjectMapper for JSON serialization with support for Java 8 time types.
+     */
+    private static class AlertSerializationSchema implements SerializationSchema<Alert> {
+        
+        private static final long serialVersionUID = 1L;
+        
+        private transient ObjectMapper objectMapper;
+        
+        @Override
+        public void open(SerializationSchema.InitializationContext context) throws Exception {
+            // Initialize ObjectMapper with Java Time module for Instant serialization
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+        
+        @Override
+        public byte[] serialize(Alert alert) {
+            if (objectMapper == null) {
+                objectMapper = new ObjectMapper();
+                objectMapper.registerModule(new JavaTimeModule());
+            }
+            try {
+                return objectMapper.writeValueAsBytes(alert);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to serialize Alert to JSON", e);
+            }
+        }
     }
 }
