@@ -1,0 +1,9 @@
+# AEGIS SIEM GraphQL Schema
+# This schema provides the API interface for querying security events and managing alerts
+
+# Root Query type for read operations
+type Query {
+  # Placeholder query to ensure schema is valid
+  # Will be expanded in subsequent tasks with searchEvents, getAlerts, etc.
+  _empty: String
+}
