@@ -1,9 +1,187 @@
 # AEGIS SIEM GraphQL Schema
 # This schema provides the API interface for querying security events and managing alerts
 
+# Custom scalar for DateTime (ISO 8601 format)
+scalar DateTime
+
+# Scalar type for JSON data
+scalar JSON
+
 # Root Query type for read operations
 type Query {
-  # Placeholder query to ensure schema is valid
-  # Will be expanded in subsequent tasks with searchEvents, getAlerts, etc.
-  _empty: String
+  # Search security events using AQL query language
+  # query: AQL query string for filtering and transforming events
+  # timeRange: Time range specification (e.g., "last 24h", "last 7d")
+  # limit: Maximum number of results to return (default: 100, max: 10000)
+  searchEvents(query: String!, timeRange: String!, limit: Int = 100): [Event!]!
+  
+  # Query alerts with optional filters
+  # Returns alerts matching the specified criteria
+  getAlerts(
+    # Filter by alert severity (1=Info, 2=Low, 3=Medium, 4=High, 5=Critical)
+    severity: Int
+    
+    # Filter by alert status
+    status: AlertStatus
+    
+    # Time range filter in AQL format (e.g., "last 24h", "last 7d")
+    # Or ISO 8601 format for absolute ranges
+    timeRange: String!
+    
+    # Optional limit on number of results (default: 100)
+    limit: Int = 100
+    
+    # Optional offset for pagination
+    offset: Int = 0
+  ): [Alert!]!
+}
+
+# Represents a normalized security event in OCSF format
+type Event {
+  # Unique identifier for the event
+  id: ID!
+  
+  # Event timestamp in ISO 8601 format
+  time: String!
+  
+  # Tenant identifier for multi-tenant isolation
+  tenantId: String!
+  
+  # Event severity (1=Info, 2=Low, 3=Medium, 4=High, 5=Critical)
+  severity: Int!
+  
+  # OCSF class identifier
+  classUid: Int!
+  
+  # OCSF category identifier
+  categoryUid: Int!
+  
+  # Actor who performed the action
+  actor: Actor
+  
+  # Source endpoint information
+  srcEndpoint: Endpoint
+  
+  # Destination endpoint information
+  dstEndpoint: Endpoint
+  
+  # Human-readable event message
+  message: String
+  
+  # Original raw event data
+  rawData: String
+  
+  # Threat intelligence enrichment data
+  threatInfo: ThreatInfo
+  
+  # UEBA anomaly score (0.0 to 1.0)
+  uebaScore: Float
+  
+  # Additional metadata
+  metadata: JSON
+}
+
+# Represents an actor (user, process, or service) in a security event
+type Actor {
+  # Username or service account
+  user: String
+  
+  # Process name or path
+  process: String
+  
+  # Session identifier
+  session: String
+}
+
+# Represents a network endpoint (source or destination)
+type Endpoint {
+  # IP address (IPv4 or IPv6)
+  ip: String
+  
+  # Port number
+  port: Int
+  
+  # Hostname or FQDN
+  hostname: String
+  
+  # MAC address
+  mac: String
+}
+
+# Threat intelligence information for an indicator
+type ThreatInfo {
+  # Indicator value (IP, domain, hash, etc.)
+  indicator: String
+  
+  # Reputation score (0-100, higher is more malicious)
+  reputationScore: Int
+  
+  # Threat categories
+  categories: [String!]
+  
+  # First seen timestamp
+  firstSeen: String
+  
+  # Last seen timestamp
+  lastSeen: String
+}
+
+# Alert type representing a security alert
+type Alert {
+  # Unique alert identifier
+  id: ID!
+  
+  # Timestamp when the alert was generated
+  time: String!
+  
+  # Tenant identifier for multi-tenancy
+  tenantId: String!
+  
+  # Alert severity (1=Info, 2=Low, 3=Medium, 4=High, 5=Critical)
+  severity: Int!
+  
+  # Alert title
+  title: String!
+  
+  # Detailed alert description
+  description: String!
+  
+  # ID of the rule that triggered this alert
+  ruleId: String!
+  
+  # Name of the rule that triggered this alert
+  ruleName: String!
+  
+  # IDs of events that triggered this alert
+  eventIds: [String!]!
+  
+  # Current status of the alert
+  status: AlertStatus!
+  
+  # Timestamp when alert was acknowledged (if applicable)
+  acknowledgedAt: String
+  
+  # User who acknowledged the alert (if applicable)
+  acknowledgedBy: String
+  
+  # Additional context information
+  context: JSON
+}
+
+# Alert status enumeration
+enum AlertStatus {
+  # Alert is newly created and not yet reviewed
+  OPEN
+  
+  # Alert has been acknowledged by an analyst
+  ACKNOWLEDGED
+  
+  # Alert is being actively investigated
+  IN_PROGRESS
+  
+  # Alert investigation is complete
+  RESOLVED
+  
+  # Alert was determined to be a false positive
+  FALSE_POSITIVE
 }
