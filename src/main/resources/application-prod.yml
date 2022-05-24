@@ -70,6 +70,13 @@ clickhouse:
 
 # Production-specific settings
 aegis:
+  kafka:
+    # Kafka topic names
+    normalized-events-topic: normalized-events
+    alerts-topic: alerts
+    dead-letter-queue-topic: dead-letter-queue
+    # Consumer group for Flink correlation engine
+    consumer-group: aegis-correlation-engine
   ingestion:
     buffer-size: 100000
     spill-enabled: true

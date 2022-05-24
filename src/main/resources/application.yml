@@ -28,6 +28,13 @@ logging:
 
 # Aegis Buffer Configuration
 aegis:
+  kafka:
+    # Kafka topic names (defaults)
+    normalized-events-topic: normalized-events
+    alerts-topic: alerts
+    dead-letter-queue-topic: dead-letter-queue
+    # Consumer group for Flink correlation engine
+    consumer-group: aegis-correlation-engine
   buffer:
     queue-directory: ./data/buffer-queue
     roll-cycle: HOURLY

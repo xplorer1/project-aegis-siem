@@ -1,16 +1,26 @@
 package com.aegis.correlation;
 
+import com.aegis.domain.OcsfEvent;
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -44,6 +54,15 @@ public class FlinkJobConfig {
 
     @Value("${aegis.flink.restart-delay:10000}")
     private long restartDelay;
+
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${aegis.kafka.normalized-events-topic:normalized-events}")
+    private String normalizedEventsTopic;
+
+    @Value("${aegis.kafka.consumer-group:aegis-correlation-engine}")
+    private String consumerGroup;
 
     /**
      * Creates and configures the Flink StreamExecutionEnvironment.
@@ -154,5 +173,93 @@ public class FlinkJobConfig {
      */
     public String getCheckpointDir() {
         return checkpointDir;
+    }
+
+    /**
+     * Creates a KafkaSource for consuming normalized events from Kafka.
+     * 
+     * The source is configured with:
+     * - JSON deserialization for OcsfEvent objects
+     * - Consumer group for distributed consumption
+     * - Bounded event time watermarks for windowing operations
+     * - Automatic offset management with exactly-once semantics
+     * 
+     * @return configured KafkaSource for OcsfEvent stream
+     */
+    @Bean
+    public KafkaSource<OcsfEvent> kafkaSource() {
+        return KafkaSource.<OcsfEvent>builder()
+            // Set Kafka bootstrap servers
+            .setBootstrapServers(bootstrapServers)
+            
+            // Set the topic to consume from
+            .setTopics(normalizedEventsTopic)
+            
+            // Set consumer group ID for distributed consumption
+            .setGroupId(consumerGroup)
+            
+            // Start reading from the earliest available offset for new consumer groups
+            // This ensures no events are missed when the correlation engine starts
+            .setStartingOffsets(OffsetsInitializer.earliest())
+            
+            // Set deserialization schema for converting Kafka records to OcsfEvent objects
+            .setValueOnlyDeserializer(new OcsfEventDeserializationSchema())
+            
+            // Set bounded out-of-orderness for watermark generation
+            // This allows events to arrive up to 5 seconds late before being considered for windows
+            .build();
+    }
+
+    /**
+     * Custom deserialization schema for OcsfEvent objects.
+     * Uses Jackson ObjectMapper for JSON deserialization with support for Java 8 time types.
+     */
+    private static class OcsfEventDeserializationSchema implements DeserializationSchema<OcsfEvent> {
+        
+        private static final long serialVersionUID = 1L;
+        
+        private transient ObjectMapper objectMapper;
+        
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) throws Exception {
+            // Initialize ObjectMapper with Java Time module for Instant serialization
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+        
+        @Override
+        public OcsfEvent deserialize(byte[] message) throws IOException {
+            if (objectMapper == null) {
+                objectMapper = new ObjectMapper();
+                objectMapper.registerModule(new JavaTimeModule());
+            }
+            return objectMapper.readValue(message, OcsfEvent.class);
+        }
+        
+        @Override
+        public boolean isEndOfStream(OcsfEvent nextElement) {
+            // This is a continuous stream, so never end
+            return false;
+        }
+        
+        @Override
+        public TypeInformation<OcsfEvent> getProducedType() {
+            return TypeInformation.of(OcsfEvent.class);
+        }
+    }
+
+    /**
+     * Creates a WatermarkStrategy for handling event time in the stream.
+     * 
+     * Watermarks are used to track progress in event time and trigger window computations.
+     * This strategy allows events to arrive up to 5 seconds late before being dropped.
+     * 
+     * @return configured WatermarkStrategy for OcsfEvent stream
+     */
+    @Bean
+    public WatermarkStrategy<OcsfEvent> watermarkStrategy() {
+        return WatermarkStrategy
+            .<OcsfEvent>forBoundedOutOfOrderness(Duration.ofSeconds(5))
+            .withTimestampAssigner((event, timestamp) -> event.getTime().toEpochMilli());
     }
 }
