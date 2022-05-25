@@ -4,6 +4,7 @@ import com.aegis.domain.Alert;
 import com.aegis.domain.AlertStatus;
 import com.aegis.domain.OcsfEvent;
 import com.aegis.domain.SigmaRule;
+import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
@@ -14,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -51,6 +53,102 @@ import java.util.concurrent.TimeUnit;
 public class SigmaRuleCompiler {
     
     private static final Logger log = LoggerFactory.getLogger(SigmaRuleCompiler.class);
+    
+    private final YAMLMapper yamlMapper;
+    
+    /**
+     * Constructor initializes the YAML mapper for parsing Sigma rules.
+     */
+    public SigmaRuleCompiler() {
+        this.yamlMapper = new YAMLMapper();
+    }
+    
+    /**
+     * Parses a Sigma rule from YAML string format.
+     * 
+     * This method uses the SnakeYAML library (via Jackson's YAMLMapper) to parse
+     * YAML-formatted Sigma rules into SigmaRule objects. The detection section
+     * is parsed as a nested map structure containing selection criteria, conditions,
+     * and timeframes.
+     * 
+     * Example YAML:
+     * <pre>
+     * title: Brute Force Attack
+     * status: stable
+     * logsource:
+     *   category: authentication
+     * detection:
+     *   selection:
+     *     event_type: authentication
+     *     outcome: failure
+     *   condition: selection | count(source_ip) by user > 5 in 5m
+     *   timeframe: 5m
+     * level: high
+     * </pre>
+     * 
+     * @param yaml the YAML string containing the Sigma rule
+     * @return the parsed SigmaRule object
+     * @throws IOException if the YAML cannot be parsed
+     */
+    public SigmaRule parseYamlRule(String yaml) throws IOException {
+        log.debug("Parsing Sigma rule from YAML");
+        
+        try {
+            SigmaRule rule = yamlMapper.readValue(yaml, SigmaRule.class);
+            
+            // Validate that the rule has required fields
+            if (rule.getTitle() == null || rule.getTitle().isEmpty()) {
+                throw new IOException("Sigma rule must have a title");
+            }
+            
+            if (rule.getDetection() == null || rule.getDetection().isEmpty()) {
+                throw new IOException("Sigma rule must have a detection section");
+            }
+            
+            log.info("Successfully parsed Sigma rule: {}", rule.getTitle());
+            return rule;
+            
+        } catch (IOException e) {
+            log.error("Failed to parse Sigma rule from YAML: {}", e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Parses the detection section of a Sigma rule.
+     * 
+     * The detection section contains:
+     * - selection: field-value pairs that events must match
+     * - condition: the logical condition and aggregation to apply
+     * - timeframe: the time window for aggregation
+     * 
+     * @param rule the Sigma rule containing the detection section
+     * @return a map containing the parsed detection configuration
+     */
+    public Map<String, Object> parseDetectionSection(SigmaRule rule) {
+        Map<String, Object> detection = rule.getDetection();
+        
+        if (detection == null) {
+            log.warn("Rule {} has no detection section", rule.getId());
+            return new HashMap<>();
+        }
+        
+        log.debug("Parsing detection section for rule: {}", rule.getTitle());
+        log.debug("Detection keys: {}", detection.keySet());
+        
+        // Log the parsed components for debugging
+        if (detection.containsKey("selection")) {
+            log.debug("Selection criteria: {}", detection.get("selection"));
+        }
+        if (detection.containsKey("condition")) {
+            log.debug("Condition: {}", detection.get("condition"));
+        }
+        if (detection.containsKey("timeframe")) {
+            log.debug("Timeframe: {}", detection.get("timeframe"));
+        }
+        
+        return detection;
+    }
     
     /**
      * Compiles a Sigma rule into a Flink DataStream transformation.
