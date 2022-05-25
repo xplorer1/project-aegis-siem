@@ -94,6 +94,9 @@ dependencies {
     // Jackson Afterburner module for bytecode generation and performance
     implementation("com.fasterxml.jackson.module:jackson-module-afterburner")
     
+    // Jackson YAML format for Sigma rule parsing
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml")
+    
     // GraphQL dependencies (Task 1.12)
     // Spring Boot GraphQL starter for API Gateway
     implementation("org.springframework.boot:spring-boot-starter-graphql")
