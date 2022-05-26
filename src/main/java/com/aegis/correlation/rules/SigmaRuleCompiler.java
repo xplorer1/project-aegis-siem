@@ -227,6 +227,16 @@ public class SigmaRuleCompiler {
      * The selection criteria is a map of field names to expected values.
      * This method checks if the event's fields match all the criteria.
      * 
+     * Supported field mappings:
+     * - event_type, class_uid -> OcsfEvent.classUid
+     * - category, category_uid -> OcsfEvent.categoryUid
+     * - severity -> OcsfEvent.severity
+     * - tenant_id -> OcsfEvent.tenantId
+     * - outcome -> extracted from event metadata
+     * - user -> extracted from actor
+     * - source_ip, src_ip -> extracted from source endpoint
+     * - dest_ip, dst_ip -> extracted from destination endpoint
+     * 
      * @param event the OCSF event to check
      * @param selection the selection criteria from the Sigma rule
      * @return true if the event matches all selection criteria, false otherwise
@@ -235,6 +245,8 @@ public class SigmaRuleCompiler {
         if (selection == null || selection.isEmpty()) {
             return true; // No selection criteria means match all
         }
+        
+        log.trace("Checking event against selection criteria: {}", selection);
         
         // Check each selection criterion
         for (Map.Entry<String, Object> criterion : selection.entrySet()) {
@@ -246,36 +258,94 @@ public class SigmaRuleCompiler {
             
             // Check if values match
             if (!valuesMatch(actualValue, expectedValue)) {
+                log.trace("Event does not match criterion: {} = {} (expected: {})", 
+                    field, actualValue, expectedValue);
                 return false;
             }
         }
         
+        log.trace("Event matches all selection criteria");
         return true;
     }
     
     /**
      * Extracts a field value from an OCSF event.
      * 
-     * This is a simplified implementation that handles common fields.
-     * A full implementation would use reflection or a field mapping system.
+     * This implementation handles common Sigma field names and maps them to
+     * OCSF event fields. It supports nested field access for actor and endpoint data.
+     * 
+     * Supported fields:
+     * - event_type, class_uid: event classification
+     * - category, category_uid: event category
+     * - severity: event severity level
+     * - tenant_id: tenant identifier
+     * - outcome: event outcome (success/failure)
+     * - user: actor username
+     * - process: actor process name
+     * - source_ip, src_ip: source IP address
+     * - dest_ip, dst_ip: destination IP address
+     * - source_port, src_port: source port number
+     * - dest_port, dst_port: destination port number
      * 
      * @param event the OCSF event
      * @param fieldName the name of the field to extract
      * @return the field value, or null if not found
      */
     private Object getFieldValue(OcsfEvent event, String fieldName) {
+        if (event == null || fieldName == null) {
+            return null;
+        }
+        
+        // Normalize field name to lowercase for case-insensitive matching
+        String normalizedField = fieldName.toLowerCase().trim();
+        
         // Map common Sigma field names to OCSF event fields
-        return switch (fieldName.toLowerCase()) {
+        return switch (normalizedField) {
             case "event_type", "class_uid" -> event.getClassUid();
             case "category", "category_uid" -> event.getCategoryUid();
             case "severity" -> event.getSeverity();
             case "tenant_id" -> event.getTenantId();
-            default -> null; // Field not found
+            
+            // Actor-related fields
+            case "user", "username" -> event.getActor() != null ? event.getActor().getUser() : null;
+            case "process", "process_name" -> event.getActor() != null ? event.getActor().getProcess() : null;
+            
+            // Source endpoint fields
+            case "source_ip", "src_ip", "sourceip" -> 
+                event.getSrcEndpoint() != null ? event.getSrcEndpoint().getIp() : null;
+            case "source_port", "src_port", "sourceport" -> 
+                event.getSrcEndpoint() != null ? event.getSrcEndpoint().getPort() : null;
+            case "source_hostname", "src_hostname" -> 
+                event.getSrcEndpoint() != null ? event.getSrcEndpoint().getHostname() : null;
+            
+            // Destination endpoint fields
+            case "dest_ip", "dst_ip", "destination_ip", "destip" -> 
+                event.getDstEndpoint() != null ? event.getDstEndpoint().getIp() : null;
+            case "dest_port", "dst_port", "destination_port", "destport" -> 
+                event.getDstEndpoint() != null ? event.getDstEndpoint().getPort() : null;
+            case "dest_hostname", "dst_hostname" -> 
+                event.getDstEndpoint() != null ? event.getDstEndpoint().getHostname() : null;
+            
+            // Metadata fields
+            case "outcome", "result" -> event.getMetadata() != null ? 
+                event.getMetadata().get("outcome") : null;
+            case "message" -> event.getMessage();
+            
+            default -> {
+                log.trace("Unknown field: {}", fieldName);
+                yield null; // Field not found
+            }
         };
     }
     
     /**
-     * Checks if two values match, handling different types.
+     * Checks if two values match, handling different types and comparison operators.
+     * 
+     * This method supports:
+     * - Exact string matching (case-insensitive)
+     * - Numeric equality
+     * - Null handling
+     * - Type coercion for numbers
      * 
      * @param actual the actual value from the event
      * @param expected the expected value from the rule
@@ -289,8 +359,16 @@ public class SigmaRuleCompiler {
             return false;
         }
         
-        // Convert to strings for comparison
-        return actual.toString().equals(expected.toString());
+        // Handle numeric comparisons
+        if (actual instanceof Number && expected instanceof Number) {
+            return ((Number) actual).doubleValue() == ((Number) expected).doubleValue();
+        }
+        
+        // Handle string comparisons (case-insensitive)
+        String actualStr = actual.toString().toLowerCase().trim();
+        String expectedStr = expected.toString().toLowerCase().trim();
+        
+        return actualStr.equals(expectedStr);
     }
     
     /**
