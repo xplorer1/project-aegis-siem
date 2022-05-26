@@ -161,6 +161,11 @@ public class SigmaRuleCompiler {
      * 5. Filters aggregates that exceed the threshold
      * 6. Maps matching aggregates to Alert objects
      * 
+     * Window types:
+     * - Tumbling: Fixed-size, non-overlapping windows (default)
+     * - Sliding: Fixed-size, overlapping windows with configurable slide interval
+     * - Session: Dynamic windows based on inactivity gaps
+     * 
      * @param rule the Sigma rule to compile
      * @param events the input stream of OCSF events
      * @return a DataStream of alerts generated when the rule matches
@@ -192,6 +197,9 @@ public class SigmaRuleCompiler {
         // Parse grouping key from condition (e.g., "by user")
         String groupByField = parseGroupByField(condition);
         
+        // Determine window type from detection metadata or default to tumbling
+        String windowType = determineWindowType(detection);
+        
         // Step 1: Filter events based on selection criteria
         DataStream<OcsfEvent> filtered = events.filter(event -> matchesSelection(event, selection));
         
@@ -200,11 +208,10 @@ public class SigmaRuleCompiler {
         // In a full implementation, this would be dynamic based on groupByField
         DataStream<OcsfEvent> keyed = filtered.keyBy(OcsfEvent::getTenantId);
         
-        // Step 3: Apply windowing based on timeframe
-        // Default to tumbling windows for simplicity
-        DataStream<Map<String, Long>> aggregated = keyed
-            .window(TumblingEventTimeWindows.of(Time.minutes(timeframeMinutes)))
-            .aggregate(new CountBySourceIp());
+        // Step 3: Apply windowing based on window type and timeframe
+        DataStream<Map<String, Long>> aggregated = applyWindowing(
+            keyed, windowType, timeframeMinutes, detection
+        );
         
         // Step 4: Filter aggregates that exceed threshold
         DataStream<Map<String, Long>> thresholdExceeded = aggregated
@@ -219,6 +226,113 @@ public class SigmaRuleCompiler {
         
         // Step 5: Create alerts from matching aggregates
         return thresholdExceeded.map(counts -> createAlert(rule, counts));
+    }
+    
+    /**
+     * Determines the window type to use for the rule.
+     * 
+     * Window types can be specified in the detection section using a "window_type" field,
+     * or inferred from the condition string. Defaults to "tumbling" if not specified.
+     * 
+     * Supported window types:
+     * - tumbling: Fixed-size, non-overlapping windows
+     * - sliding: Fixed-size, overlapping windows
+     * - session: Dynamic windows based on inactivity gaps
+     * 
+     * @param detection the detection section of the Sigma rule
+     * @return the window type ("tumbling", "sliding", or "session")
+     */
+    private String determineWindowType(Map<String, Object> detection) {
+        // Check for explicit window_type field
+        if (detection.containsKey("window_type")) {
+            String windowType = detection.get("window_type").toString().toLowerCase();
+            log.debug("Using explicit window type: {}", windowType);
+            return windowType;
+        }
+        
+        // Check condition for window type hints
+        String condition = (String) detection.get("condition");
+        if (condition != null) {
+            String lowerCondition = condition.toLowerCase();
+            if (lowerCondition.contains("sliding")) {
+                log.debug("Inferred sliding window from condition");
+                return "sliding";
+            } else if (lowerCondition.contains("session")) {
+                log.debug("Inferred session window from condition");
+                return "session";
+            }
+        }
+        
+        // Default to tumbling windows
+        log.debug("Using default tumbling window");
+        return "tumbling";
+    }
+    
+    /**
+     * Applies windowing to the keyed stream based on the specified window type.
+     * 
+     * This method configures the appropriate Flink window assigner and applies
+     * the CountBySourceIp aggregation function.
+     * 
+     * Tumbling windows:
+     * - Fixed-size, non-overlapping time windows
+     * - Each event belongs to exactly one window
+     * - Example: 5-minute windows [0-5), [5-10), [10-15), ...
+     * 
+     * @param keyed the keyed stream of events
+     * @param windowType the type of window ("tumbling", "sliding", or "session")
+     * @param timeframeMinutes the window size in minutes
+     * @param detection the detection section for additional window parameters
+     * @return a DataStream of aggregated counts
+     */
+    private DataStream<Map<String, Long>> applyWindowing(
+            DataStream<OcsfEvent> keyed,
+            String windowType,
+            long timeframeMinutes,
+            Map<String, Object> detection) {
+        
+        log.debug("Applying {} window with timeframe: {} minutes", windowType, timeframeMinutes);
+        
+        return switch (windowType.toLowerCase()) {
+            case "tumbling" -> applyTumblingWindow(keyed, timeframeMinutes);
+            case "sliding" -> applySlidingWindow(keyed, timeframeMinutes, detection);
+            case "session" -> applySessionWindow(keyed, timeframeMinutes, detection);
+            default -> {
+                log.warn("Unknown window type: {}, defaulting to tumbling", windowType);
+                yield applyTumblingWindow(keyed, timeframeMinutes);
+            }
+        };
+    }
+    
+    /**
+     * Applies a tumbling window to the keyed stream.
+     * 
+     * Tumbling windows are fixed-size, non-overlapping time windows.
+     * Each event belongs to exactly one window based on its event time.
+     * 
+     * Configuration:
+     * - Window size: specified by timeframeMinutes
+     * - Window alignment: aligned to epoch (e.g., 0:00, 0:05, 0:10 for 5-minute windows)
+     * - Trigger: fires when watermark passes window end time
+     * 
+     * Example with 5-minute windows:
+     * - Window 1: [00:00 - 00:05)
+     * - Window 2: [00:05 - 00:10)
+     * - Window 3: [00:10 - 00:15)
+     * 
+     * @param keyed the keyed stream of events
+     * @param timeframeMinutes the window size in minutes
+     * @return a DataStream of aggregated counts
+     */
+    private DataStream<Map<String, Long>> applyTumblingWindow(
+            DataStream<OcsfEvent> keyed,
+            long timeframeMinutes) {
+        
+        log.info("Configuring tumbling window: size = {} minutes", timeframeMinutes);
+        
+        return keyed
+            .window(TumblingEventTimeWindows.of(Time.minutes(timeframeMinutes)))
+            .aggregate(new CountBySourceIp());
     }
     
     /**
