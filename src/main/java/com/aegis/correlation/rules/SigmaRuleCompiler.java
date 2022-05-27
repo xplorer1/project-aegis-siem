@@ -416,6 +416,90 @@ public class SigmaRuleCompiler {
     }
     
     /**
+     * Applies a session window to the keyed stream.
+     * 
+     * Session windows are dynamic windows that group events based on periods of activity
+     * separated by gaps of inactivity. Unlike tumbling and sliding windows, session windows
+     * have variable length and are not aligned to a fixed time grid.
+     * 
+     * Configuration:
+     * - Gap duration: specified in detection section or uses timeframeMinutes as default
+     * - Window creation: new window starts when gap exceeds threshold
+     * - Window closure: window closes when no events arrive for gap duration
+     * - Merging: overlapping sessions are automatically merged
+     * 
+     * Example with 5-minute gap:
+     * - Events at 00:00, 00:02, 00:04 -> Session 1: [00:00 - 00:09)
+     * - Gap from 00:04 to 00:12 (8 minutes > 5 minute gap)
+     * - Events at 00:12, 00:14 -> Session 2: [00:12 - 00:19)
+     * 
+     * Use cases:
+     * - User session analysis (login to logout)
+     * - Attack campaign detection (bursts of activity)
+     * - Application transaction tracking
+     * - Network connection analysis
+     * 
+     * @param keyed the keyed stream of events
+     * @param timeframeMinutes the default gap duration in minutes
+     * @param detection the detection section for gap configuration
+     * @return a DataStream of aggregated counts
+     */
+    private DataStream<Map<String, Long>> applySessionWindow(
+            DataStream<OcsfEvent> keyed,
+            long timeframeMinutes,
+            Map<String, Object> detection) {
+        
+        // Parse session gap from detection section
+        // Default to timeframeMinutes if not specified
+        long gapMinutes = parseSessionGap(detection, timeframeMinutes);
+        
+        log.info("Configuring session window: gap = {} minutes", gapMinutes);
+        
+        return keyed
+            .window(EventTimeSessionWindows.withGap(Time.minutes(gapMinutes)))
+            .aggregate(new CountBySourceIp());
+    }
+    
+    /**
+     * Parses the session gap duration from the detection section.
+     * 
+     * The session gap can be specified using:
+     * - "session_gap" field (e.g., "5m", "30s", "1h")
+     * - "gap" field (alternative name)
+     * - "inactivity_gap" field (descriptive name)
+     * 
+     * The gap duration determines how long to wait for new events before
+     * closing a session window. If events arrive within the gap, they are
+     * added to the current session. If the gap is exceeded, a new session starts.
+     * 
+     * If not specified, defaults to the timeframe value.
+     * 
+     * @param detection the detection section of the Sigma rule
+     * @param defaultGapMinutes the default gap duration in minutes
+     * @return the session gap in minutes
+     */
+    private long parseSessionGap(Map<String, Object> detection, long defaultGapMinutes) {
+        // Check for explicit session_gap field
+        if (detection.containsKey("session_gap")) {
+            return parseTimeframe(detection.get("session_gap"));
+        }
+        
+        // Check for alternative "gap" field
+        if (detection.containsKey("gap")) {
+            return parseTimeframe(detection.get("gap"));
+        }
+        
+        // Check for descriptive "inactivity_gap" field
+        if (detection.containsKey("inactivity_gap")) {
+            return parseTimeframe(detection.get("inactivity_gap"));
+        }
+        
+        // Default to the timeframe value
+        log.debug("No session gap specified, using default: {} minutes", defaultGapMinutes);
+        return defaultGapMinutes;
+    }
+    
+    /**
      * Checks if an event matches the selection criteria defined in a Sigma rule.
      * 
      * The selection criteria is a map of field names to expected values.
