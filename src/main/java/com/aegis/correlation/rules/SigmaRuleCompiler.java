@@ -336,6 +336,86 @@ public class SigmaRuleCompiler {
     }
     
     /**
+     * Applies a sliding window to the keyed stream.
+     * 
+     * Sliding windows are fixed-size, overlapping time windows that slide forward
+     * at regular intervals. Each event can belong to multiple windows.
+     * 
+     * Configuration:
+     * - Window size: specified by timeframeMinutes
+     * - Slide interval: specified in detection section or defaults to half the window size
+     * - Window alignment: aligned to epoch
+     * - Trigger: fires when watermark passes window end time
+     * 
+     * Example with 10-minute windows sliding every 5 minutes:
+     * - Window 1: [00:00 - 00:10)
+     * - Window 2: [00:05 - 00:15)
+     * - Window 3: [00:10 - 00:20)
+     * 
+     * An event at 00:07 would belong to both Window 1 and Window 2.
+     * 
+     * Use cases:
+     * - Detecting patterns that span window boundaries
+     * - More frequent updates (every slide interval vs every window size)
+     * - Smoothing out detection over time
+     * 
+     * @param keyed the keyed stream of events
+     * @param timeframeMinutes the window size in minutes
+     * @param detection the detection section for slide interval configuration
+     * @return a DataStream of aggregated counts
+     */
+    private DataStream<Map<String, Long>> applySlidingWindow(
+            DataStream<OcsfEvent> keyed,
+            long timeframeMinutes,
+            Map<String, Object> detection) {
+        
+        // Parse slide interval from detection section
+        // Default to half the window size if not specified
+        long slideMinutes = parseSlideInterval(detection, timeframeMinutes);
+        
+        log.info("Configuring sliding window: size = {} minutes, slide = {} minutes", 
+            timeframeMinutes, slideMinutes);
+        
+        return keyed
+            .window(SlidingEventTimeWindows.of(
+                Time.minutes(timeframeMinutes),
+                Time.minutes(slideMinutes)
+            ))
+            .aggregate(new CountBySourceIp());
+    }
+    
+    /**
+     * Parses the slide interval for sliding windows from the detection section.
+     * 
+     * The slide interval can be specified using:
+     * - "slide_interval" field (e.g., "2m", "30s", "1h")
+     * - "slide" field (alternative name)
+     * 
+     * If not specified, defaults to half the window size for 50% overlap.
+     * 
+     * @param detection the detection section of the Sigma rule
+     * @param windowSizeMinutes the window size in minutes
+     * @return the slide interval in minutes
+     */
+    private long parseSlideInterval(Map<String, Object> detection, long windowSizeMinutes) {
+        // Check for explicit slide_interval field
+        if (detection.containsKey("slide_interval")) {
+            return parseTimeframe(detection.get("slide_interval"));
+        }
+        
+        // Check for alternative "slide" field
+        if (detection.containsKey("slide")) {
+            return parseTimeframe(detection.get("slide"));
+        }
+        
+        // Default to half the window size for 50% overlap
+        long defaultSlide = windowSizeMinutes / 2;
+        log.debug("No slide interval specified, using default: {} minutes (50% of window size)", 
+            defaultSlide);
+        return defaultSlide;
+    }
+    
+    /**
      * Checks if an event matches the selection criteria defined in a Sigma rule.
      * 
      * The selection criteria is a map of field names to expected values.
