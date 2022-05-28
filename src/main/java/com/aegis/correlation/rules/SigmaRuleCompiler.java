@@ -804,32 +804,80 @@ public class SigmaRuleCompiler {
      * Aggregate function that counts events by source IP address.
      * 
      * This is used in windowed aggregations to count how many events
-     * occurred from each source IP within a time window.
+     * occurred from each source IP within a time window. The aggregator
+     * maintains a map where keys are source IP addresses and values are
+     * the count of events from that IP.
+     * 
+     * This is particularly useful for detecting:
+     * - Brute force attacks (many failed logins from same IP)
+     * - Port scans (many connection attempts from same IP)
+     * - DDoS attacks (high volume from specific IPs)
+     * 
+     * The aggregator is designed to work with Flink's windowing operators
+     * and supports both tumbling and sliding windows.
      */
     public static class CountBySourceIp 
         implements AggregateFunction<OcsfEvent, Map<String, Long>, Map<String, Long>> {
         
         private static final long serialVersionUID = 1L;
         
+        /**
+         * Creates a new empty accumulator for counting events.
+         * 
+         * @return an empty HashMap to store IP -> count mappings
+         */
         @Override
         public Map<String, Long> createAccumulator() {
             return new HashMap<>();
         }
         
+        /**
+         * Adds an event to the accumulator, incrementing the count for its source IP.
+         * 
+         * Extracts the source IP from the event's source endpoint. If no source IP
+         * is available, uses "unknown" as the key. This ensures events without
+         * source IPs are still counted and can trigger alerts if needed.
+         * 
+         * @param event the OCSF event to add
+         * @param accumulator the current accumulator state
+         * @return the updated accumulator
+         */
         @Override
         public Map<String, Long> add(OcsfEvent event, Map<String, Long> accumulator) {
-            // For this simplified implementation, we'll use tenant_id as the key
-            // In a full implementation, this would extract the actual source IP
-            String key = event.getTenantId() != null ? event.getTenantId() : "unknown";
-            accumulator.merge(key, 1L, Long::sum);
+            // Extract source IP from the event
+            String sourceIp = "unknown";
+            
+            if (event.getSrcEndpoint() != null && event.getSrcEndpoint().getIp() != null) {
+                sourceIp = event.getSrcEndpoint().getIp();
+            }
+            
+            // Increment the count for this source IP
+            accumulator.merge(sourceIp, 1L, Long::sum);
+            
             return accumulator;
         }
         
+        /**
+         * Returns the final result from the accumulator.
+         * 
+         * @param accumulator the accumulator containing IP -> count mappings
+         * @return the final map of source IPs to event counts
+         */
         @Override
         public Map<String, Long> getResult(Map<String, Long> accumulator) {
             return accumulator;
         }
         
+        /**
+         * Merges two accumulators together.
+         * 
+         * This is used when Flink needs to combine partial aggregates from
+         * different parallel instances or when merging session windows.
+         * 
+         * @param acc1 the first accumulator
+         * @param acc2 the second accumulator
+         * @return the merged accumulator containing combined counts
+         */
         @Override
         public Map<String, Long> merge(Map<String, Long> acc1, Map<String, Long> acc2) {
             acc2.forEach((key, value) -> acc1.merge(key, value, Long::sum));
