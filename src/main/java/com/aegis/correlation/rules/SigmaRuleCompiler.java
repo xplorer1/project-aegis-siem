@@ -753,27 +753,124 @@ public class SigmaRuleCompiler {
     /**
      * Creates an Alert from a Sigma rule match.
      * 
+     * This method constructs a comprehensive alert object when a Sigma rule
+     * detects a threat pattern. The alert includes:
+     * - Unique identifier and timestamp
+     * - Rule information (ID, title, description)
+     * - Severity level mapped from Sigma level
+     * - Status (initially OPEN)
+     * - Aggregated event counts that triggered the alert
+     * - Tenant context for multi-tenancy
+     * 
+     * The alert is ready to be sent to the alerts Kafka topic for downstream
+     * processing, notification, and storage.
+     * 
      * @param rule the Sigma rule that matched
-     * @param counts the aggregated counts that triggered the alert
-     * @return a new Alert object
+     * @param counts the aggregated counts that triggered the alert (map of key -> count)
+     * @return a new Alert object with all fields populated
      */
     private Alert createAlert(SigmaRule rule, Map<String, Long> counts) {
         Alert alert = new Alert();
+        
+        // Generate unique alert ID
         alert.setId(UUID.randomUUID().toString());
+        
+        // Set alert timestamp to current time
         alert.setTime(Instant.now());
+        
+        // Link alert to the Sigma rule that triggered it
         alert.setRuleId(rule.getId());
         alert.setTitle(rule.getTitle());
-        alert.setDescription(rule.getDescription() != null ? rule.getDescription() : "");
+        
+        // Set description from rule, or generate one from counts
+        if (rule.getDescription() != null && !rule.getDescription().isEmpty()) {
+            alert.setDescription(rule.getDescription());
+        } else {
+            // Generate description from aggregated counts
+            alert.setDescription(generateAlertDescription(rule, counts));
+        }
+        
+        // Set initial status to OPEN (requires analyst review)
         alert.setStatus(AlertStatus.OPEN);
         
-        // Map Sigma level to OCSF severity
+        // Map Sigma level to OCSF severity (1-5 scale)
         alert.setSeverity(mapLevelToSeverity(rule.getLevel()));
         
-        // Set tenant ID from the first entry in counts (simplified)
-        // In a real implementation, this would be extracted from the keyed stream
-        alert.setTenantId("default");
+        // Extract tenant ID from the counts map
+        // In a real implementation with proper keying, this would come from the stream key
+        // For now, we'll use the first key in the counts map or default to "default"
+        String tenantId = "default";
+        if (!counts.isEmpty()) {
+            // Try to extract tenant ID from the first key
+            // This is a simplified approach; in production, tenant ID would be
+            // properly propagated through the keyed stream
+            tenantId = counts.keySet().iterator().next();
+        }
+        alert.setTenantId(tenantId);
+        
+        // Store the aggregated counts in the alert metadata for forensic analysis
+        // This allows analysts to see exactly what triggered the alert
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("aggregated_counts", counts);
+        metadata.put("rule_level", rule.getLevel());
+        metadata.put("rule_status", rule.getStatus());
+        
+        // Calculate total event count across all keys
+        long totalCount = counts.values().stream().mapToLong(Long::longValue).sum();
+        metadata.put("total_event_count", totalCount);
+        
+        // Find the key with the highest count (e.g., most active source IP)
+        String topKey = counts.entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey)
+            .orElse("unknown");
+        Long topCount = counts.get(topKey);
+        metadata.put("top_contributor", topKey);
+        metadata.put("top_contributor_count", topCount);
+        
+        alert.setMetadata(metadata);
+        
+        log.info("Created alert: {} (ID: {}) - Rule: {} - Severity: {} - Total events: {}", 
+            alert.getTitle(), alert.getId(), rule.getTitle(), alert.getSeverity(), totalCount);
         
         return alert;
+    }
+    
+    /**
+     * Generates a descriptive alert message from the rule and aggregated counts.
+     * 
+     * This method creates a human-readable description when the Sigma rule
+     * doesn't provide one. It includes information about what was detected
+     * and the magnitude of the detection.
+     * 
+     * @param rule the Sigma rule that matched
+     * @param counts the aggregated counts
+     * @return a descriptive alert message
+     */
+    private String generateAlertDescription(SigmaRule rule, Map<String, Long> counts) {
+        long totalCount = counts.values().stream().mapToLong(Long::longValue).sum();
+        int uniqueKeys = counts.size();
+        
+        StringBuilder description = new StringBuilder();
+        description.append("Detected pattern matching rule '").append(rule.getTitle()).append("'. ");
+        description.append("Total events: ").append(totalCount).append(", ");
+        description.append("Unique sources: ").append(uniqueKeys).append(". ");
+        
+        // Add top contributors
+        if (!counts.isEmpty()) {
+            description.append("Top contributors: ");
+            counts.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(3)
+                .forEach(entry -> description.append(entry.getKey())
+                    .append(" (").append(entry.getValue()).append("), "));
+            
+            // Remove trailing comma and space
+            description.setLength(description.length() - 2);
+            description.append(".");
+        }
+        
+        return description.toString();
     }
     
     /**
