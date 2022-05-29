@@ -1,0 +1,134 @@
+# Sigma Rule: Brute Force Attack Detection
+#
+# This rule detects potential brute force attacks by identifying multiple
+# failed authentication attempts from the same source IP address within a
+# short time window.
+#
+# Attack Pattern:
+# Attackers attempt to gain unauthorized access by systematically trying
+# multiple passwords or credentials. This generates a high volume of failed
+# authentication events from a single source.
+#
+# Detection Logic:
+# - Monitor authentication events
+# - Filter for failed login attempts
+# - Count failures per source IP
+# - Alert when threshold exceeded within time window
+#
+# MITRE ATT&CK: T1110 - Brute Force
+# - T1110.001 - Password Guessing
+# - T1110.002 - Password Cracking
+# - T1110.003 - Password Spraying
+
+title: Brute Force Attack Detection
+id: bf-001
+status: stable
+description: |
+  Detects potential brute force attacks by identifying multiple failed
+  authentication attempts from the same source IP address. This pattern
+  indicates an attacker attempting to guess credentials through repeated
+  login attempts.
+  
+  The rule triggers when more than 5 failed authentication attempts occur
+  from a single source IP within a 5-minute window. This threshold balances
+  detection sensitivity with false positive reduction (legitimate users
+  occasionally mistype passwords).
+  
+  Response Actions:
+  - Investigate the source IP for malicious activity
+  - Check if any successful logins occurred from the same IP
+  - Consider implementing IP-based rate limiting or blocking
+  - Review authentication logs for the targeted user accounts
+  - Verify if this is a distributed attack from multiple IPs
+
+author: AEGIS Security Team
+date: 2022-05-29
+
+# Log source configuration
+logsource:
+  category: authentication
+  product: any
+  service: any
+
+# Detection criteria
+detection:
+  # Selection: Filter for failed authentication events
+  selection:
+    # OCSF class_uid for authentication events
+    # 3002 = Authentication
+    class_uid: 3002
+    
+    # OCSF category_uid for system activity
+    # 3 = System Activity
+    category_uid: 3
+    
+    # Filter for failed outcomes
+    # In OCSF, outcome is stored in metadata
+    outcome: failure
+  
+  # Condition: Count failed attempts by source IP
+  # Alert when more than 5 failures occur within the time window
+  condition: selection | count(source_ip) by user > 5 in 5m
+  
+  # Time window for aggregation
+  timeframe: 5m
+  
+  # Window type: tumbling (non-overlapping windows)
+  window_type: tumbling
+
+# Severity level
+# high = OCSF severity 4
+level: high
+
+# Tags for categorization and filtering
+tags:
+  - attack.credential_access
+  - attack.t1110
+  - attack.t1110.001
+  - attack.brute_force
+  - authentication
+  - failed_login
+
+# False positive considerations
+falsepositives:
+  - Legitimate users who repeatedly mistype their password
+  - Automated systems with incorrect credentials
+  - Password managers with outdated credentials
+  - Service accounts with expired passwords
+  - Users returning from vacation with forgotten passwords
+
+# References
+references:
+  - https://attack.mitre.org/techniques/T1110/
+  - https://ocsf.io/schema/classes/authentication
+
+# Detection tuning notes
+notes: |
+  Tuning Recommendations:
+  
+  1. Threshold Adjustment:
+     - Increase threshold (e.g., > 10) for environments with frequent
+       legitimate password mistakes
+     - Decrease threshold (e.g., > 3) for high-security environments
+       or privileged accounts
+  
+  2. Time Window:
+     - Shorter windows (e.g., 2m) detect faster attacks but may increase
+       false positives
+     - Longer windows (e.g., 10m) reduce false positives but may miss
+       rapid attacks
+  
+  3. Account-Specific Rules:
+     - Create separate rules for privileged accounts with lower thresholds
+     - Whitelist service accounts with known authentication patterns
+     - Consider user behavior baselines for anomaly detection
+  
+  4. Source IP Considerations:
+     - Whitelist corporate VPN exit IPs if multiple users share the same IP
+     - Consider geolocation for additional context
+     - Track both source IP and user account for correlation
+  
+  5. Integration:
+     - Correlate with successful logins from the same IP
+     - Check threat intelligence feeds for known malicious IPs
+     - Monitor for password spray patterns (many users, few attempts each)
