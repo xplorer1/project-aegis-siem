@@ -1,0 +1,214 @@
+# Sigma Rule: Port Scan Detection
+#
+# This rule detects potential port scanning activity by identifying multiple
+# connection attempts to different ports from the same source IP address
+# within a short time window.
+#
+# Attack Pattern:
+# Attackers perform reconnaissance by systematically probing multiple ports
+# on target systems to identify open services and potential vulnerabilities.
+# This generates a high volume of connection attempts to various ports.
+#
+# Detection Logic:
+# - Monitor network connection events
+# - Count unique destination ports per source IP
+# - Alert when threshold exceeded within time window
+#
+# MITRE ATT&CK: T1046 - Network Service Scanning
+# - Reconnaissance technique to discover services
+# - Precursor to exploitation attempts
+
+title: Port Scan Detection
+id: ps-001
+status: stable
+description: |
+  Detects potential port scanning activity by identifying multiple connection
+  attempts to different destination ports from the same source IP address.
+  This pattern indicates reconnaissance activity where an attacker is probing
+  for open services and potential attack vectors.
+  
+  The rule triggers when a single source IP attempts to connect to more than
+  20 unique destination ports within a 10-minute window. This threshold is
+  designed to catch both slow scans and rapid scanning tools while minimizing
+  false positives from legitimate network activity.
+  
+  Port scanning is typically the first phase of a targeted attack, used to:
+  - Map the network topology
+  - Identify running services and versions
+  - Discover potential vulnerabilities
+  - Plan subsequent exploitation attempts
+  
+  Response Actions:
+  - Investigate the source IP for malicious intent
+  - Check if the source is internal or external
+  - Review firewall logs for blocked connection attempts
+  - Identify which systems were targeted
+  - Determine if any successful connections were established
+  - Consider blocking the source IP at the perimeter
+  - Correlate with other reconnaissance indicators
+
+author: AEGIS Security Team
+date: 2022-05-29
+
+# Log source configuration
+logsource:
+  category: network
+  product: firewall
+  service: any
+
+# Detection criteria
+detection:
+  # Selection: Filter for network connection events
+  selection:
+    # OCSF class_uid for network activity
+    # 4001 = Network Activity
+    class_uid: 4001
+    
+    # OCSF category_uid for network activity
+    # 4 = Network Activity
+    category_uid: 4
+    
+    # We want to detect connection attempts (both successful and failed)
+    # This includes SYN packets, connection requests, etc.
+    # The specific field depends on the log source
+  
+  # Condition: Count unique destination ports by source IP
+  # Alert when more than 20 unique ports are accessed within the time window
+  # This indicates systematic port probing behavior
+  condition: selection | count(dest_port) by source_ip > 20 in 10m
+  
+  # Time window for aggregation
+  # 10 minutes allows detection of both fast and slow scans
+  timeframe: 10m
+  
+  # Window type: sliding for continuous monitoring
+  # Sliding windows provide better detection of scans that span window boundaries
+  # Slide every 2 minutes for frequent updates
+  window_type: sliding
+  slide_interval: 2m
+
+# Severity level
+# high = OCSF severity 4
+# Port scanning is a clear indicator of reconnaissance and potential attack
+level: high
+
+# Tags for categorization and filtering
+tags:
+  - attack.reconnaissance
+  - attack.discovery
+  - attack.t1046
+  - network.scan
+  - port_scan
+  - reconnaissance
+
+# False positive considerations
+falsepositives:
+  - Network monitoring tools performing legitimate scans
+  - Vulnerability scanners (Nessus, OpenVAS, etc.)
+  - Load balancers health checking multiple backend services
+  - Microservices architectures with service discovery
+  - Container orchestration platforms (Kubernetes, Docker Swarm)
+  - Network management systems
+  - Backup systems connecting to multiple services
+  - Legitimate security testing with proper authorization
+
+# References
+references:
+  - https://attack.mitre.org/techniques/T1046/
+  - https://ocsf.io/schema/classes/network_activity
+  - https://nmap.org/book/port-scanning.html
+
+# Detection tuning notes
+notes: |
+  Tuning Recommendations:
+  
+  1. Threshold Adjustment:
+     - Increase threshold (e.g., > 50) for environments with complex
+       microservices or service mesh architectures
+     - Decrease threshold (e.g., > 10) for high-security environments
+       or DMZ networks
+     - Consider different thresholds for internal vs external sources
+  
+  2. Time Window:
+     - Shorter windows (e.g., 5m) detect rapid scans (nmap -T4, -T5)
+     - Longer windows (e.g., 30m) detect slow scans (nmap -T0, -T1)
+     - Consider multiple rules with different windows for comprehensive coverage
+  
+  3. Port Range Filtering:
+     - Focus on well-known ports (1-1024) for higher confidence
+     - Exclude common ephemeral port ranges (32768-65535) to reduce noise
+     - Create separate rules for specific port ranges (e.g., database ports)
+  
+  4. Source IP Whitelisting:
+     - Whitelist authorized vulnerability scanners
+     - Whitelist network monitoring systems
+     - Whitelist load balancer health check IPs
+     - Document all whitelisted sources
+  
+  5. Scan Type Detection:
+     - Vertical scan: Many ports on single destination (this rule)
+     - Horizontal scan: Single port on many destinations (separate rule needed)
+     - Consider combining both patterns for comprehensive detection
+  
+  6. Integration:
+     - Correlate with IDS/IPS alerts for known scanning tools
+     - Check threat intelligence for known scanning IPs
+     - Monitor for exploitation attempts following scans
+     - Track scan-to-exploit time for incident response metrics
+  
+  7. Advanced Detection:
+     - Consider connection state (SYN only vs full handshake)
+     - Analyze scan patterns (sequential vs random ports)
+     - Detect stealth scans (FIN, NULL, Xmas scans)
+     - Monitor for UDP scans separately
+  
+  8. Response Automation:
+     - Automatic temporary blocking of external scanners
+     - Alert escalation for internal source IPs
+     - Integration with SOAR for automated investigation
+     - Honeypot deployment to attract and analyze scanners
+
+# Scan detection patterns
+patterns:
+  # Common port scan signatures
+  - name: nmap_fast_scan
+    description: Nmap default or fast scan (-T4, -T5)
+    threshold: 100
+    timeframe: 1m
+  
+  - name: nmap_slow_scan
+    description: Nmap stealth scan (-T0, -T1, -T2)
+    threshold: 20
+    timeframe: 30m
+  
+  - name: masscan
+    description: Masscan ultra-fast scanner
+    threshold: 1000
+    timeframe: 1m
+  
+  - name: zmap
+    description: ZMap internet-wide scanner
+    threshold: 500
+    timeframe: 1m
+
+# Common ports targeted in scans
+common_scan_targets:
+  - 21    # FTP
+  - 22    # SSH
+  - 23    # Telnet
+  - 25    # SMTP
+  - 53    # DNS
+  - 80    # HTTP
+  - 110   # POP3
+  - 135   # MS-RPC
+  - 139   # NetBIOS
+  - 143   # IMAP
+  - 443   # HTTPS
+  - 445   # SMB
+  - 1433  # MS-SQL
+  - 3306  # MySQL
+  - 3389  # RDP
+  - 5432  # PostgreSQL
+  - 5900  # VNC
+  - 8080  # HTTP-Alt
+  - 8443  # HTTPS-Alt
