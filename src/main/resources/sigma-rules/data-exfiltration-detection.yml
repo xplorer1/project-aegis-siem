@@ -1,0 +1,284 @@
+# Sigma Rule: Data Exfiltration Detection
+#
+# This rule detects potential data exfiltration by identifying unusually
+# large data transfers from internal systems to external destinations.
+# Data exfiltration is a critical phase of many cyber attacks where
+# attackers steal sensitive information.
+#
+# Attack Pattern:
+# After gaining access and locating valuable data, attackers transfer
+# large volumes of data to external systems under their control. This
+# generates network traffic with abnormally high data volumes compared
+# to typical user behavior.
+#
+# Detection Logic:
+# - Monitor network data transfer events
+# - Sum total bytes transferred per source IP
+# - Alert when volume exceeds threshold within time window
+#
+# MITRE ATT&CK: T1041 - Exfiltration Over C2 Channel
+# - T1048 - Exfiltration Over Alternative Protocol
+# - T1567 - Exfiltration Over Web Service
+
+title: Data Exfiltration Detection
+id: de-001
+status: stable
+description: |
+  Detects potential data exfiltration by identifying unusually large volumes
+  of data being transferred from internal systems to external destinations.
+  This pattern indicates possible theft of sensitive information, intellectual
+  property, or confidential data.
+  
+  The rule triggers when a single source IP transfers more than 1 GB of data
+  to external destinations within a 15-minute window. This threshold is
+  designed to catch significant data theft while accounting for legitimate
+  large file transfers and backups.
+  
+  Data exfiltration can occur through various channels:
+  - Direct network connections to attacker-controlled servers
+  - Cloud storage services (Dropbox, Google Drive, OneDrive)
+  - Email attachments to external addresses
+  - DNS tunneling or other covert channels
+  - FTP, SFTP, or SCP transfers
+  - HTTP/HTTPS POST requests with large payloads
+  
+  This rule focuses on volume-based detection, which is effective for
+  detecting bulk data theft but may miss low-and-slow exfiltration
+  techniques that transfer small amounts over extended periods.
+  
+  Response Actions:
+  - Immediately investigate the source system and user
+  - Identify what data was accessed and transferred
+  - Determine the destination IP/domain and its reputation
+  - Check for signs of compromise on the source system
+  - Review authentication logs for the involved user account
+  - Assess the sensitivity of potentially exfiltrated data
+  - Consider network isolation of the affected system
+  - Engage incident response team for containment
+  - Preserve evidence for forensic analysis
+  - Notify stakeholders per incident response plan
+
+author: AEGIS Security Team
+date: 2022-05-30
+
+# Log source configuration
+logsource:
+  category: network
+  product: firewall
+  service: proxy
+
+# Detection criteria
+detection:
+  # Selection: Filter for outbound network traffic with data transfer
+  selection:
+    # OCSF class_uid for network activity
+    # 4001 = Network Activity
+    class_uid: 4001
+    
+    # OCSF category_uid for network activity
+    # 4 = Network Activity
+    category_uid: 4
+    
+    # Filter for outbound traffic (internal source to external destination)
+    # This would typically be determined by checking if destination IP
+    # is outside the organization's network ranges
+    
+    # We want events that include data transfer metrics
+    # The specific field depends on the log source but typically includes:
+    # - bytes_out, bytes_sent, or similar
+    # - traffic_bytes for total bidirectional traffic
+  
+  # Condition: Sum total bytes transferred by source IP
+  # Alert when more than 1 GB (1,073,741,824 bytes) is transferred
+  # within the time window
+  #
+  # Note: The actual implementation would use a sum aggregation function
+  # rather than count. This is a simplified representation for the Sigma format.
+  # In the Flink implementation, this would be:
+  # .aggregate(new SumBytesBySourceIp())
+  # .filter(sum -> sum > 1_073_741_824)
+  condition: selection | sum(bytes_out) by source_ip > 1073741824 in 15m
+  
+  # Time window for aggregation
+  # 15 minutes provides a balance between detecting rapid exfiltration
+  # and allowing for legitimate large transfers
+  timeframe: 15m
+  
+  # Window type: tumbling for discrete time periods
+  # This prevents double-counting the same data transfer
+  window_type: tumbling
+
+# Severity level
+# critical = OCSF severity 5
+# Data exfiltration represents actual data loss and is a critical security event
+level: critical
+
+# Tags for categorization and filtering
+tags:
+  - attack.exfiltration
+  - attack.t1041
+  - attack.t1048
+  - attack.t1567
+  - data_loss
+  - data_theft
+  - exfiltration
+  - network.outbound
+
+# False positive considerations
+falsepositives:
+  - Legitimate large file uploads (cloud backups, file sharing)
+  - Software updates and patches being downloaded
+  - Video conferencing with screen sharing
+  - Large email attachments to external recipients
+  - Database replication to external systems
+  - Backup systems transferring to cloud storage
+  - Content delivery and media streaming
+  - Development teams deploying to cloud platforms
+  - Data analytics platforms exporting reports
+  - Authorized data migrations or transfers
+
+# References
+references:
+  - https://attack.mitre.org/techniques/T1041/
+  - https://attack.mitre.org/techniques/T1048/
+  - https://attack.mitre.org/techniques/T1567/
+  - https://ocsf.io/schema/classes/network_activity
+
+# Detection tuning notes
+notes: |
+  Tuning Recommendations:
+  
+  1. Threshold Adjustment:
+     - Increase threshold (e.g., > 5 GB) for environments with frequent
+       large file transfers or cloud backups
+     - Decrease threshold (e.g., > 100 MB) for high-security environments
+       with sensitive data
+     - Consider different thresholds for different user roles or departments
+     - Adjust based on baseline network behavior analysis
+  
+  2. Time Window:
+     - Shorter windows (e.g., 5m) detect rapid exfiltration but increase
+       false positives from legitimate transfers
+     - Longer windows (e.g., 1h) reduce false positives but may delay
+       detection of ongoing exfiltration
+     - Consider multiple rules with different windows for layered detection
+  
+  3. Destination Filtering:
+     - Focus on transfers to external/untrusted destinations
+     - Whitelist known cloud backup services with proper DLP controls
+     - Whitelist authorized file sharing platforms
+     - Blacklist known malicious IPs and domains
+     - Consider geographic restrictions (e.g., no transfers to certain countries)
+  
+  4. Source Filtering:
+     - Apply stricter thresholds to servers with sensitive data
+     - Whitelist authorized backup servers and data transfer systems
+     - Monitor privileged user accounts more closely
+     - Consider user behavior baselines for anomaly detection
+  
+  5. Protocol Analysis:
+     - Monitor specific protocols: FTP, SFTP, HTTP/HTTPS POST
+     - Detect unusual protocols for data transfer (DNS tunneling, ICMP)
+     - Analyze encrypted traffic patterns (TLS/SSL)
+     - Identify use of anonymization tools (Tor, VPN, proxies)
+  
+  6. Behavioral Analysis:
+     - Establish baseline data transfer patterns per user/system
+     - Detect deviations from normal behavior
+     - Consider time-of-day patterns (transfers during off-hours)
+     - Monitor for sudden changes in transfer volumes
+  
+  7. Data Classification:
+     - Integrate with DLP systems for content inspection
+     - Apply stricter rules for systems with classified data
+     - Monitor file types being transferred (databases, documents, archives)
+     - Detect compression or encryption of data before transfer
+  
+  8. Multi-Stage Detection:
+     - Correlate with file access events (large file reads)
+     - Monitor for data staging (copying files to temp locations)
+     - Detect compression or archiving of multiple files
+     - Track authentication events (compromised credentials)
+  
+  9. Response Automation:
+     - Automatic blocking of suspicious transfers
+     - Network isolation of affected systems
+     - Alert escalation to security operations center
+     - Integration with SOAR for automated investigation
+     - Capture network traffic for forensic analysis
+  
+  10. Compliance Considerations:
+      - Align thresholds with data protection regulations (GDPR, HIPAA)
+      - Document all detected exfiltration attempts
+      - Maintain audit trail for compliance reporting
+      - Integrate with data loss prevention (DLP) systems
+
+# Exfiltration techniques and detection
+techniques:
+  # Common exfiltration methods
+  - name: direct_connection
+    description: Direct connection to attacker-controlled server
+    indicators:
+      - Unusual destination IPs
+      - Non-standard ports
+      - Encrypted connections to unknown hosts
+  
+  - name: cloud_storage
+    description: Upload to cloud storage services
+    indicators:
+      - Large uploads to Dropbox, Google Drive, OneDrive
+      - Use of personal cloud accounts from corporate systems
+      - Unusual API usage patterns
+  
+  - name: email_exfiltration
+    description: Data sent via email attachments
+    indicators:
+      - Large email attachments to external addresses
+      - Multiple emails with attachments in short time
+      - Use of personal email from corporate systems
+  
+  - name: dns_tunneling
+    description: Data encoded in DNS queries
+    indicators:
+      - Unusually long DNS queries
+      - High volume of DNS requests
+      - Queries to suspicious domains
+  
+  - name: steganography
+    description: Data hidden in images or other files
+    indicators:
+      - Upload of many image files
+      - Unusual file sizes for image types
+      - Modified file headers
+
+# Volume thresholds for different data sensitivity levels
+sensitivity_thresholds:
+  - level: public
+    threshold: 10 GB
+    description: Public or non-sensitive data
+  
+  - level: internal
+    threshold: 1 GB
+    description: Internal business data (default)
+  
+  - level: confidential
+    threshold: 100 MB
+    description: Confidential business information
+  
+  - level: restricted
+    threshold: 10 MB
+    description: Highly sensitive or regulated data
+  
+  - level: classified
+    threshold: 1 MB
+    description: Classified or top-secret information
+
+# Common file types in exfiltration
+common_exfiltrated_files:
+  - .zip, .rar, .7z     # Compressed archives
+  - .sql, .db, .mdb     # Database files
+  - .xlsx, .docx, .pdf  # Documents
+  - .pst, .ost          # Email archives
+  - .key, .pem, .pfx    # Certificates and keys
+  - .csv, .json, .xml   # Data exports
+  - .bak, .backup       # Backup files
