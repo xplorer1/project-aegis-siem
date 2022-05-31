@@ -1,6 +1,7 @@
 package com.aegis.enrichment;
 
 import com.aegis.domain.ThreatInfo;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.common.hash.BloomFilter;
 import org.springframework.stereotype.Component;
@@ -34,8 +35,16 @@ public class ThreatIntelEnricher {
     public ThreatIntelEnricher(TipClient tipClient) {
         this.tipClient = tipClient;
         
-        // Cache will be configured in next task
-        this.cache = null;
+        // Configure Caffeine cache with 1M entries and 10min TTL
+        // This provides fast lookups for recently queried IPs/domains
+        this.cache = Caffeine.newBuilder()
+            .maximumSize(1_000_000)  // Maximum 1 million entries
+            .expireAfterWrite(10, TimeUnit.MINUTES)  // 10 minute TTL
+            .recordStats()  // Enable statistics for monitoring
+            .build(key -> {
+                // Loader function: fetch from TIP on cache miss
+                return tipClient.lookup(key).block();
+            });
         
         // Bloom filter will be initialized in subsequent task
         this.knownSafe = null;
@@ -90,5 +99,24 @@ public class ThreatIntelEnricher {
             return false;
         }
         return knownSafe.mightContain(ip);
+    }
+    
+    /**
+     * Get cache statistics for monitoring.
+     * Returns metrics like hit rate, miss rate, eviction count.
+     * 
+     * @return Cache statistics
+     */
+    public com.github.benmanes.caffeine.cache.stats.CacheStats getCacheStats() {
+        return cache.stats();
+    }
+    
+    /**
+     * Get the current cache size.
+     * 
+     * @return Number of entries in the cache
+     */
+    public long getCacheSize() {
+        return cache.estimatedSize();
     }
 }
