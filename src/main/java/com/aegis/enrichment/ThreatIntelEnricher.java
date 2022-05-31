@@ -4,6 +4,7 @@ import com.aegis.domain.ThreatInfo;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.common.hash.BloomFilter;
+import com.google.common.hash.Funnels;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
@@ -46,8 +47,14 @@ public class ThreatIntelEnricher {
                 return tipClient.lookup(key).block();
             });
         
-        // Bloom filter will be initialized in subsequent task
-        this.knownSafe = null;
+        // Initialize Bloom filter for known-safe IPs
+        // Expected insertions: 50 million (covers typical enterprise internal IPs + known CDNs)
+        // False positive rate: 1% (acceptable trade-off for performance)
+        this.knownSafe = BloomFilter.create(
+            Funnels.stringFunnel(StandardCharsets.UTF_8),
+            50_000_000,  // 50M expected insertions
+            0.01         // 1% false positive rate
+        );
     }
     
     /**
@@ -82,9 +89,7 @@ public class ThreatIntelEnricher {
      * @param ip The IP address to mark as safe
      */
     public void markAsSafe(String ip) {
-        if (knownSafe != null) {
-            knownSafe.put(ip);
-        }
+        knownSafe.put(ip);
     }
     
     /**
@@ -95,9 +100,6 @@ public class ThreatIntelEnricher {
      * @return true if the IP might be safe, false if definitely not safe
      */
     public boolean mightBeSafe(String ip) {
-        if (knownSafe == null) {
-            return false;
-        }
         return knownSafe.mightContain(ip);
     }
     
