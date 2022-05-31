@@ -2,6 +2,8 @@ package com.aegis.graphql;
 
 import com.aegis.domain.Alert;
 import com.aegis.domain.AlertStatus;
+import com.aegis.query.AqlTranspiler;
+import com.aegis.query.QueryExecutor;
 import com.aegis.storage.hot.AlertRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.graphql.data.method.annotation.Argument;
@@ -18,7 +20,23 @@ import java.util.regex.Pattern;
 
 /**
  * GraphQL controller for AEGIS SIEM API
- * Provides query and mutation operations for security events and alerts
+ * 
+ * This controller provides the GraphQL API interface for querying security events
+ * and managing alerts. It serves as the entry point for all GraphQL operations
+ * defined in the schema.graphqls file.
+ * 
+ * Key responsibilities:
+ * - Handle GraphQL query operations (searchEvents, getAlerts)
+ * - Handle GraphQL mutation operations (acknowledgeAlert)
+ * - Parse and validate query arguments
+ * - Coordinate with backend services (QueryExecutor, AlertRepository)
+ * - Transform results to GraphQL response format
+ * 
+ * The controller uses Spring GraphQL annotations:
+ * - @Controller: Marks this as a GraphQL controller
+ * - @QueryMapping: Maps methods to GraphQL Query type fields
+ * - @MutationMapping: Maps methods to GraphQL Mutation type fields
+ * - @Argument: Binds method parameters to GraphQL arguments
  */
 @Controller
 public class AegisGraphQLController {
@@ -27,8 +45,25 @@ public class AegisGraphQLController {
     // Pattern for parsing relative time ranges like "last 24h", "last 7d"
     private static final Pattern TIME_RANGE_PATTERN = Pattern.compile("last\\s+(\\d+)([hdwmy])");
     
+    /**
+     * Repository for querying and managing alerts in OpenSearch
+     */
     @Autowired
     private AlertRepository alertRepository;
+    
+    /**
+     * Transpiler for converting AQL queries to tier-specific query formats
+     * Used by searchEvents to execute queries across Hot/Warm/Cold tiers
+     */
+    @Autowired
+    private AqlTranspiler aqlTranspiler;
+    
+    /**
+     * Executor for running queries across multiple storage tiers
+     * Handles concurrent execution and result merging
+     */
+    @Autowired
+    private QueryExecutor queryExecutor;
     
     /**
      * Query alerts with optional filters
