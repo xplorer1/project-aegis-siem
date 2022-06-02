@@ -64,20 +64,20 @@ public class AegisGraphQLController {
     private final QueryExecutor queryExecutor;
     
     /**
-     * Constructor with dependencies
+     * Constructor with dependency injection
      * 
+     * @param alertRepository Repository for alert operations
      * @param aqlTranspiler AQL query transpiler
      * @param queryExecutor Query executor for multi-tier queries
-     * @param alertRepository Alert repository for querying alerts
      */
     @Autowired
     public AegisGraphQLController(
+            AlertRepository alertRepository,
             AqlTranspiler aqlTranspiler,
-            QueryExecutor queryExecutor,
-            AlertRepository alertRepository) {
+            QueryExecutor queryExecutor) {
+        this.alertRepository = alertRepository;
         this.aqlTranspiler = aqlTranspiler;
         this.queryExecutor = queryExecutor;
-        this.alertRepository = alertRepository;
     }
     
     /**
