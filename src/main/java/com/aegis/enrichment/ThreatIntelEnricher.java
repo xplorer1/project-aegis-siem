@@ -67,8 +67,18 @@ public class ThreatIntelEnricher {
      * @return Mono containing ThreatInfo
      */
     public Mono<ThreatInfo> enrich(String ip) {
-        // Implementation will be completed in task 9.6
-        return Mono.just(ThreatInfo.SAFE);
+        // Fast path: Check Bloom filter first
+        // If IP is in the known-safe set, return immediately without cache/API lookup
+        if (knownSafe.mightContain(ip)) {
+            return Mono.just(ThreatInfo.SAFE);
+        }
+        
+        // Slow path: Check cache (which will call TIP API on miss)
+        return Mono.fromCallable(() -> cache.get(ip))
+            .onErrorResume(e -> {
+                // If cache lookup fails, return safe to avoid blocking pipeline
+                return Mono.just(ThreatInfo.SAFE);
+            });
     }
     
     /**
@@ -78,8 +88,12 @@ public class ThreatIntelEnricher {
      * @return Mono containing ThreatInfo
      */
     public Mono<ThreatInfo> enrichDomain(String domain) {
-        // Similar to IP enrichment
-        return Mono.just(ThreatInfo.SAFE);
+        // Domains don't use Bloom filter (too many possible values)
+        // Go straight to cache
+        return Mono.fromCallable(() -> cache.get(domain))
+            .onErrorResume(e -> {
+                return Mono.just(ThreatInfo.SAFE);
+            });
     }
     
     /**
