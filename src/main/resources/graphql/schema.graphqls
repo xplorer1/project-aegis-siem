@@ -185,3 +185,12 @@ enum AlertStatus {
   # Alert was determined to be a false positive
   FALSE_POSITIVE
 }
+
+# Root Mutation type for write operations
+type Mutation {
+  # Acknowledge an alert
+  # Updates the alert status to ACKNOWLEDGED and records who acknowledged it
+  # alertId: The unique identifier of the alert to acknowledge
+  # Returns the updated alert
+  acknowledgeAlert(alertId: ID!): Alert!
+}
