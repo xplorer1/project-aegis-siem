@@ -37,6 +37,7 @@ public class TipClientRestImpl implements TipClient {
     private final WebClient webClient;
     private final CircuitBreaker circuitBreaker;
     private final RateLimiter rateLimiter;
+    private final EnrichmentMetrics metrics;
     
     @Value("${aegis.tip.api.url:https://api.threatintel.example.com}")
     private String tipApiUrl;
@@ -50,7 +51,8 @@ public class TipClientRestImpl implements TipClient {
     /**
      * Constructor initializes WebClient and resilience components
      */
-    public TipClientRestImpl() {
+    public TipClientRestImpl(EnrichmentMetrics metrics) {
+        this.metrics = metrics;
         // Initialize WebClient with timeout
         this.webClient = WebClient.builder()
             .baseUrl(tipApiUrl)
@@ -80,6 +82,8 @@ public class TipClientRestImpl implements TipClient {
     
     @Override
     public Mono<ThreatInfo> lookup(String ip) {
+        metrics.recordTipApiCall();
+        
         return webClient.get()
             .uri("/v1/ip/{ip}", ip)
             .header("X-API-Key", tipApiKey)
@@ -90,13 +94,18 @@ public class TipClientRestImpl implements TipClient {
             .transformDeferred(RateLimiterOperator.of(rateLimiter))
             .retryWhen(Retry.backoff(2, Duration.ofMillis(100))
                 .filter(this::isRetryableError))
-            .onErrorResume(this::handleError)
+            .onErrorResume(e -> {
+                metrics.recordTipApiError();
+                return handleError(e);
+            })
             .doOnSuccess(info -> log.debug("TIP lookup for IP {} returned: {}", ip, info.getThreatCategory()))
             .doOnError(e -> log.warn("TIP lookup failed for IP {}: {}", ip, e.getMessage()));
     }
     
     @Override
     public Mono<ThreatInfo> lookupDomain(String domain) {
+        metrics.recordTipApiCall();
+        
         return webClient.get()
             .uri("/v1/domain/{domain}", domain)
             .header("X-API-Key", tipApiKey)
@@ -107,13 +116,18 @@ public class TipClientRestImpl implements TipClient {
             .transformDeferred(RateLimiterOperator.of(rateLimiter))
             .retryWhen(Retry.backoff(2, Duration.ofMillis(100))
                 .filter(this::isRetryableError))
-            .onErrorResume(this::handleError)
+            .onErrorResume(e -> {
+                metrics.recordTipApiError();
+                return handleError(e);
+            })
             .doOnSuccess(info -> log.debug("TIP lookup for domain {} returned: {}", domain, info.getThreatCategory()))
             .doOnError(e -> log.warn("TIP lookup failed for domain {}: {}", domain, e.getMessage()));
     }
     
     @Override
     public Mono<ThreatInfo> lookupHash(String hash) {
+        metrics.recordTipApiCall();
+        
         return webClient.get()
             .uri("/v1/hash/{hash}", hash)
             .header("X-API-Key", tipApiKey)
@@ -124,7 +138,10 @@ public class TipClientRestImpl implements TipClient {
             .transformDeferred(RateLimiterOperator.of(rateLimiter))
             .retryWhen(Retry.backoff(2, Duration.ofMillis(100))
                 .filter(this::isRetryableError))
-            .onErrorResume(this::handleError)
+            .onErrorResume(e -> {
+                metrics.recordTipApiError();
+                return handleError(e);
+            })
             .doOnSuccess(info -> log.debug("TIP lookup for hash {} returned: {}", hash, info.getThreatCategory()))
             .doOnError(e -> log.warn("TIP lookup failed for hash {}: {}", hash, e.getMessage()));
     }

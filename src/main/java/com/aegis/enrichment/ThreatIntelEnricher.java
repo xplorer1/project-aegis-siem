@@ -5,6 +5,8 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.common.hash.BloomFilter;
 import com.google.common.hash.Funnels;
+import io.micrometer.core.instrument.Timer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
@@ -27,14 +29,18 @@ public class ThreatIntelEnricher {
     private final LoadingCache<String, ThreatInfo> cache;
     private final BloomFilter<String> knownSafe;
     private final TipClient tipClient;
+    private final EnrichmentMetrics metrics;
     
     /**
      * Constructor for ThreatIntelEnricher
      * 
      * @param tipClient The threat intelligence platform client
+     * @param metrics The metrics collector
      */
-    public ThreatIntelEnricher(TipClient tipClient) {
+    @Autowired
+    public ThreatIntelEnricher(TipClient tipClient, EnrichmentMetrics metrics) {
         this.tipClient = tipClient;
+        this.metrics = metrics;
         
         // Configure Caffeine cache with 1M entries and 10min TTL
         // This provides fast lookups for recently queried IPs/domains
@@ -67,18 +73,50 @@ public class ThreatIntelEnricher {
      * @return Mono containing ThreatInfo
      */
     public Mono<ThreatInfo> enrich(String ip) {
+        long startTime = System.currentTimeMillis();
+        
         // Fast path: Check Bloom filter first
         // If IP is in the known-safe set, return immediately without cache/API lookup
         if (knownSafe.mightContain(ip)) {
+            metrics.recordBloomFilterHit();
+            metrics.recordEnrichmentSuccess();
+            long duration = System.currentTimeMillis() - startTime;
+            metrics.recordEnrichmentLatency(duration);
             return Mono.just(ThreatInfo.SAFE);
         }
         
+        metrics.recordBloomFilterMiss();
+        
         // Slow path: Check cache (which will call TIP API on miss)
-        return Mono.fromCallable(() -> cache.get(ip))
-            .onErrorResume(e -> {
-                // If cache lookup fails, return safe to avoid blocking pipeline
-                return Mono.just(ThreatInfo.SAFE);
-            });
+        return Mono.fromCallable(() -> {
+            long lookupStart = System.currentTimeMillis();
+            
+            try {
+                ThreatInfo result = cache.get(ip);
+                
+                // Check if this was a cache hit or miss
+                // Note: Caffeine doesn't provide a direct way to check this,
+                // so we track it in the TipClient
+                
+                metrics.recordEnrichmentSuccess();
+                long duration = System.currentTimeMillis() - startTime;
+                metrics.recordEnrichmentLatency(duration);
+                
+                long lookupDuration = System.currentTimeMillis() - lookupStart;
+                metrics.recordLookupLatency(lookupDuration);
+                
+                return result;
+            } catch (Exception e) {
+                metrics.recordEnrichmentFailure();
+                throw e;
+            }
+        }).onErrorResume(e -> {
+            // If cache lookup fails, return safe to avoid blocking pipeline
+            metrics.recordEnrichmentFailure();
+            long duration = System.currentTimeMillis() - startTime;
+            metrics.recordEnrichmentLatency(duration);
+            return Mono.just(ThreatInfo.SAFE);
+        });
     }
     
     /**
@@ -88,12 +126,27 @@ public class ThreatIntelEnricher {
      * @return Mono containing ThreatInfo
      */
     public Mono<ThreatInfo> enrichDomain(String domain) {
+        long startTime = System.currentTimeMillis();
+        
         // Domains don't use Bloom filter (too many possible values)
         // Go straight to cache
-        return Mono.fromCallable(() -> cache.get(domain))
-            .onErrorResume(e -> {
-                return Mono.just(ThreatInfo.SAFE);
-            });
+        return Mono.fromCallable(() -> {
+            try {
+                ThreatInfo result = cache.get(domain);
+                metrics.recordEnrichmentSuccess();
+                long duration = System.currentTimeMillis() - startTime;
+                metrics.recordEnrichmentLatency(duration);
+                return result;
+            } catch (Exception e) {
+                metrics.recordEnrichmentFailure();
+                throw e;
+            }
+        }).onErrorResume(e -> {
+            metrics.recordEnrichmentFailure();
+            long duration = System.currentTimeMillis() - startTime;
+            metrics.recordEnrichmentLatency(duration);
+            return Mono.just(ThreatInfo.SAFE);
+        });
     }
     
     /**

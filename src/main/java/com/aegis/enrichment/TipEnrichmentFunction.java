@@ -30,14 +30,17 @@ public class TipEnrichmentFunction extends RichAsyncFunction<OcsfEvent, OcsfEven
     
     private transient ThreatIntelEnricher enricher;
     private final TipClient tipClient;
+    private final EnrichmentMetrics metrics;
     
     /**
      * Constructor
      * 
      * @param tipClient The TIP client for lookups
+     * @param metrics The metrics collector
      */
-    public TipEnrichmentFunction(TipClient tipClient) {
+    public TipEnrichmentFunction(TipClient tipClient, EnrichmentMetrics metrics) {
         this.tipClient = tipClient;
+        this.metrics = metrics;
     }
     
     @Override
@@ -45,7 +48,7 @@ public class TipEnrichmentFunction extends RichAsyncFunction<OcsfEvent, OcsfEven
         super.open(parameters);
         
         // Initialize the enricher
-        this.enricher = new ThreatIntelEnricher(tipClient);
+        this.enricher = new ThreatIntelEnricher(tipClient, metrics);
         
         // Pre-populate Bloom filter with known-safe IPs
         // This could be loaded from a configuration file or database

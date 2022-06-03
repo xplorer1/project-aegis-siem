@@ -49,6 +49,9 @@ public class CorrelationJob {
     @Autowired
     private TipClientRestImpl tipClient;
     
+    @Autowired
+    private com.aegis.enrichment.EnrichmentMetrics enrichmentMetrics;
+    
     /**
      * Initialize and start the Flink job after Spring context is ready.
      */
@@ -92,7 +95,7 @@ public class CorrelationJob {
         // Ordered: maintain event order
         DataStream<OcsfEvent> enrichedStream = AsyncDataStream.orderedWait(
             sourceStream,
-            new TipEnrichmentFunction(tipClient),
+            new TipEnrichmentFunction(tipClient, enrichmentMetrics),
             1000,  // Timeout in milliseconds
             TimeUnit.MILLISECONDS,
             100    // Capacity (max concurrent async requests)
