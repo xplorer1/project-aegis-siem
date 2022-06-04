@@ -3,6 +3,7 @@ package com.aegis.ueba;
 import ai.onnxruntime.*;
 import com.aegis.domain.OcsfEvent;
 import com.aegis.domain.UserProfile;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.nio.FloatBuffer;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -21,20 +24,50 @@ import java.util.Map;
 public class UebaScorer {
     private static final Logger logger = LoggerFactory.getLogger(UebaScorer.class);
     
+    @Value("${aegis.ueba.model-path:models/anomaly-detection.onnx}")
+    private String modelPath;
+    
     private OrtEnvironment env;
     private OrtSession session;
     
     /**
-     * Initialize ONNX Runtime environment
+     * Initialize ONNX Runtime environment and load model
      */
     @PostConstruct
     public void init() {
         try {
             env = OrtEnvironment.getEnvironment();
             logger.info("ONNX Runtime environment initialized");
+            
+            // Load ONNX model
+            loadModel();
         } catch (OrtException e) {
             logger.error("Failed to initialize ONNX Runtime", e);
             throw new RuntimeException("ONNX Runtime initialization failed", e);
+        }
+    }
+    
+    /**
+     * Load ONNX anomaly detection model
+     */
+    private void loadModel() throws OrtException {
+        try {
+            if (!Files.exists(Paths.get(modelPath))) {
+                logger.warn("ONNX model not found at {}, using mock scoring", modelPath);
+                return;
+            }
+            
+            OrtSession.SessionOptions options = new OrtSession.SessionOptions();
+            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT);
+            
+            session = env.createSession(modelPath, options);
+            
+            logger.info("ONNX model loaded from {}", modelPath);
+            logger.info("Model inputs: {}", session.getInputNames());
+            logger.info("Model outputs: {}", session.getOutputNames());
+        } catch (Exception e) {
+            logger.error("Failed to load ONNX model from {}", modelPath, e);
+            throw new OrtException("Model loading failed", e);
         }
     }
     
