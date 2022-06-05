@@ -97,16 +97,67 @@ public class UebaScorer {
      * @return Anomaly score (0.0 to 1.0)
      */
     public double scoreEvent(OcsfEvent event, UserProfile profile) {
-        // Extract features from event and profile
-        float[] features = extractFeatures(event, profile);
-        
-        // If no model loaded, return 0.0 (no anomaly)
-        if (session == null) {
+        try {
+            // Extract features from event and profile
+            float[] features = extractFeatures(event, profile);
+            
+            // If no model loaded, use simple rule-based scoring
+            if (session == null) {
+                return simpleRuleBasedScore(features);
+            }
+            
+            // Create feature tensor
+            long[] shape = {1, features.length};
+            OnnxTensor tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(features), shape);
+            
+            // Run ONNX inference
+            Map<String, OnnxTensor> inputs = new HashMap<>();
+            inputs.put(session.getInputNames().iterator().next(), tensor);
+            
+            OrtSession.Result result = session.run(inputs);
+            
+            // Extract anomaly score from output
+            float[][] output = (float[][]) result.get(0).getValue();
+            double score = output[0][0];
+            
+            // Clean up
+            tensor.close();
+            result.close();
+            
+            logger.debug("Scored event for user {}: {}", profile.getUserId(), score);
+            return Math.max(0.0, Math.min(1.0, score)); // Clamp to [0, 1]
+            
+        } catch (OrtException e) {
+            logger.error("ONNX inference failed", e);
             return 0.0;
         }
+    }
+    
+    /**
+     * Simple rule-based scoring when ONNX model is not available
+     */
+    private double simpleRuleBasedScore(float[] features) {
+        double score = 0.0;
         
-        // Placeholder for inference - will be implemented in next task
-        return 0.0;
+        // High data volume deviation
+        if (features[3] > 3.0) score += 0.3;
+        
+        // High login frequency deviation
+        if (features[4] > 3.0) score += 0.2;
+        
+        // New location
+        if (features[5] > 0.5) score += 0.2;
+        
+        // New device
+        if (features[6] > 0.5) score += 0.15;
+        
+        // Privilege escalation
+        if (features[8] > 0.5) score += 0.3;
+        
+        // Failed login
+        if (features[9] > 0.5) score += 0.15;
+        
+        return Math.min(1.0, score);
     }
     
     /**
