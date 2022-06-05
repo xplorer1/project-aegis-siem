@@ -324,12 +324,8 @@ class AegisGraphQLControllerTest {
         verify(aqlTranspiler, times(1)).transpile(anyString());
         verify(queryExecutor, times(1)).execute(any(QueryPlan.class));
     }
-}
-
-    // ========== Tests for getAlerts resolver ==========
     
-    @Mock
-    private com.aegis.storage.hot.AlertRepository alertRepository;
+    // ========== Tests for getAlerts resolver ==========
     
     @Test
     void testGetAlerts_Success() {
