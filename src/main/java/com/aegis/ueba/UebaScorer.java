@@ -97,7 +97,124 @@ public class UebaScorer {
      * @return Anomaly score (0.0 to 1.0)
      */
     public double scoreEvent(OcsfEvent event, UserProfile profile) {
-        // Placeholder - will be implemented in subsequent tasks
+        // Extract features from event and profile
+        float[] features = extractFeatures(event, profile);
+        
+        // If no model loaded, return 0.0 (no anomaly)
+        if (session == null) {
+            return 0.0;
+        }
+        
+        // Placeholder for inference - will be implemented in next task
         return 0.0;
+    }
+    
+    /**
+     * Extract features from event and user profile
+     * 
+     * @param event The event
+     * @param profile The user profile
+     * @return Feature vector
+     */
+    private float[] extractFeatures(OcsfEvent event, UserProfile profile) {
+        // Feature vector: [hour_of_day, day_of_week, data_volume, login_count_deviation, ...]
+        float[] features = new float[10];
+        
+        // Extract temporal features
+        features[0] = extractLoginHour(event);
+        features[1] = extractDayOfWeek(event);
+        
+        // Extract data volume features
+        features[2] = extractDataVolume(event);
+        features[3] = calculateDataVolumeDeviation(event, profile);
+        
+        // Extract login frequency features
+        features[4] = calculateLoginFrequencyDeviation(event, profile);
+        
+        // Extract location features
+        features[5] = isNewLocation(event, profile) ? 1.0f : 0.0f;
+        
+        // Extract device features
+        features[6] = isNewDevice(event, profile) ? 1.0f : 0.0f;
+        
+        // Extract access pattern features
+        features[7] = calculateAccessPatternDeviation(event, profile);
+        
+        // Extract privilege escalation indicator
+        features[8] = hasPrivilegeEscalation(event) ? 1.0f : 0.0f;
+        
+        // Extract failed login indicator
+        features[9] = isFailedLogin(event) ? 1.0f : 0.0f;
+        
+        return features;
+    }
+    
+    private float extractLoginHour(OcsfEvent event) {
+        // Extract hour from timestamp (0-23)
+        long timestamp = event.getTime();
+        return (timestamp / 3600000) % 24;
+    }
+    
+    private float extractDayOfWeek(OcsfEvent event) {
+        // Extract day of week (0-6)
+        long timestamp = event.getTime();
+        return ((timestamp / 86400000) + 4) % 7; // Epoch was Thursday
+    }
+    
+    private float extractDataVolume(OcsfEvent event) {
+        // Extract data volume in MB
+        return event.getMetadata() != null && event.getMetadata().containsKey("bytes_transferred")
+            ? Float.parseFloat(event.getMetadata().get("bytes_transferred").toString()) / 1_000_000.0f
+            : 0.0f;
+    }
+    
+    private float calculateDataVolumeDeviation(OcsfEvent event, UserProfile profile) {
+        float currentVolume = extractDataVolume(event);
+        double avgVolume = profile.getAverageDataVolume();
+        double stdDev = profile.getDataVolumeStdDev();
+        
+        if (stdDev == 0) return 0.0f;
+        
+        return (float) Math.abs((currentVolume - avgVolume) / stdDev);
+    }
+    
+    private float calculateLoginFrequencyDeviation(OcsfEvent event, UserProfile profile) {
+        int currentHour = (int) extractLoginHour(event);
+        double avgLogins = profile.getAverageLoginsPerHour();
+        double stdDev = profile.getLoginFrequencyStdDev();
+        
+        if (stdDev == 0) return 0.0f;
+        
+        // Simplified - in real implementation would check actual login count
+        return (float) Math.abs((1.0 - avgLogins) / stdDev);
+    }
+    
+    private boolean isNewLocation(OcsfEvent event, UserProfile profile) {
+        String location = event.getMetadata() != null 
+            ? (String) event.getMetadata().get("src_location")
+            : null;
+        return location != null && !profile.getKnownLocations().contains(location);
+    }
+    
+    private boolean isNewDevice(OcsfEvent event, UserProfile profile) {
+        String device = event.getMetadata() != null 
+            ? (String) event.getMetadata().get("device_id")
+            : null;
+        return device != null && !profile.getKnownDevices().contains(device);
+    }
+    
+    private float calculateAccessPatternDeviation(OcsfEvent event, UserProfile profile) {
+        // Simplified access pattern deviation
+        return 0.0f;
+    }
+    
+    private boolean hasPrivilegeEscalation(OcsfEvent event) {
+        return event.getMetadata() != null 
+            && Boolean.TRUE.equals(event.getMetadata().get("privilege_escalation"));
+    }
+    
+    private boolean isFailedLogin(OcsfEvent event) {
+        return "authentication".equals(event.getCategoryName()) 
+            && "failure".equals(event.getMetadata() != null ? event.getMetadata().get("status") : null);
     }
 }
