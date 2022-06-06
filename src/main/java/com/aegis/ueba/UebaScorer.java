@@ -26,9 +26,13 @@ import java.util.Map;
 public class UebaScorer {
     private static final Logger logger = LoggerFactory.getLogger(UebaScorer.class);
     private static final int SLIDING_WINDOW_DAYS = 30;
+    private static final double ANOMALY_THRESHOLD = 0.7;
     
     @Value("${aegis.ueba.model-path:models/anomaly-detection.onnx}")
     private String modelPath;
+    
+    @Value("${aegis.ueba.anomaly-threshold:0.7}")
+    private double anomalyThreshold;
     
     @Autowired
     private UserProfileRepository profileRepository;
@@ -371,5 +375,63 @@ public class UebaScorer {
                 profile.getKnownDevices().remove(0);
             }
         }
+    }
+    
+    /**
+     * Check if anomaly score exceeds threshold and generate alert if needed
+     * 
+     * @param event The event
+     * @param profile The user profile
+     * @param score The anomaly score
+     * @return Alert if threshold exceeded, null otherwise
+     */
+    public com.aegis.domain.Alert checkAnomalyThreshold(OcsfEvent event, UserProfile profile, double score) {
+        if (score >= anomalyThreshold) {
+            return generateAnomalyAlert(event, profile, score);
+        }
+        return null;
+    }
+    
+    /**
+     * Generate an anomaly alert
+     */
+    private com.aegis.domain.Alert generateAnomalyAlert(OcsfEvent event, UserProfile profile, double score) {
+        com.aegis.domain.Alert alert = new com.aegis.domain.Alert();
+        
+        alert.setId(java.util.UUID.randomUUID().toString());
+        alert.setTime(Instant.now());
+        alert.setTenantId(event.getMetadata() != null 
+            ? (String) event.getMetadata().get("tenant_id") 
+            : "default");
+        
+        // Set severity based on score
+        if (score >= 0.9) {
+            alert.setSeverity(5); // Critical
+        } else if (score >= 0.8) {
+            alert.setSeverity(4); // High
+        } else if (score >= 0.7) {
+            alert.setSeverity(3); // Medium
+        } else {
+            alert.setSeverity(2); // Low
+        }
+        
+        alert.setTitle("UEBA Anomaly Detected: " + profile.getUserId());
+        alert.setDescription(String.format(
+            "Anomalous behavior detected for user %s with score %.2f. " +
+            "Event: %s at %s",
+            profile.getUserId(),
+            score,
+            event.getCategoryName(),
+            Instant.ofEpochMilli(event.getTime())
+        ));
+        
+        alert.setRuleId("ueba-anomaly-detection");
+        alert.setStatus(com.aegis.domain.AlertStatus.OPEN);
+        alert.setAssignedTo(null);
+        
+        logger.info("Generated UEBA anomaly alert for user {} with score {}", 
+            profile.getUserId(), score);
+        
+        return alert;
     }
 }
