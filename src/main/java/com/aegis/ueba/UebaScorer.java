@@ -3,6 +3,7 @@ package com.aegis.ueba;
 import ai.onnxruntime.*;
 import com.aegis.domain.OcsfEvent;
 import com.aegis.domain.UserProfile;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
@@ -13,6 +14,7 @@ import javax.annotation.PreDestroy;
 import java.nio.FloatBuffer;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -23,9 +25,13 @@ import java.util.Map;
 @Service
 public class UebaScorer {
     private static final Logger logger = LoggerFactory.getLogger(UebaScorer.class);
+    private static final int SLIDING_WINDOW_DAYS = 30;
     
     @Value("${aegis.ueba.model-path:models/anomaly-detection.onnx}")
     private String modelPath;
+    
+    @Autowired
+    private UserProfileRepository profileRepository;
     
     private OrtEnvironment env;
     private OrtSession session;
@@ -267,5 +273,103 @@ public class UebaScorer {
     private boolean isFailedLogin(OcsfEvent event) {
         return "authentication".equals(event.getCategoryName()) 
             && "failure".equals(event.getMetadata() != null ? event.getMetadata().get("status") : null);
+    }
+    
+    /**
+     * Update user profile with new event data
+     * Uses sliding window approach to maintain recent behavior baseline
+     * 
+     * @param event The event
+     * @param profile The user profile to update
+     */
+    public void updateProfile(OcsfEvent event, UserProfile profile) {
+        try {
+            // Update last seen timestamp
+            profile.setLastSeen(Instant.now());
+            
+            // Update event count
+            profile.setEventCount(profile.getEventCount() + 1);
+            
+            // Update data volume statistics (sliding window)
+            updateDataVolumeStats(event, profile);
+            
+            // Update login frequency statistics
+            updateLoginFrequencyStats(event, profile);
+            
+            // Update known locations
+            updateKnownLocations(event, profile);
+            
+            // Update known devices
+            updateKnownDevices(event, profile);
+            
+            // Save updated profile
+            profileRepository.save(profile);
+            
+            logger.debug("Updated profile for user: {}", profile.getUserId());
+        } catch (Exception e) {
+            logger.error("Failed to update profile for user: {}", profile.getUserId(), e);
+        }
+    }
+    
+    private void updateDataVolumeStats(OcsfEvent event, UserProfile profile) {
+        float dataVolume = extractDataVolume(event);
+        if (dataVolume > 0) {
+            // Simple exponential moving average
+            double alpha = 2.0 / (SLIDING_WINDOW_DAYS + 1);
+            double oldAvg = profile.getAverageDataVolume();
+            double newAvg = alpha * dataVolume + (1 - alpha) * oldAvg;
+            profile.setAverageDataVolume(newAvg);
+            
+            // Update standard deviation (simplified)
+            double variance = Math.pow(dataVolume - newAvg, 2);
+            double oldStdDev = profile.getDataVolumeStdDev();
+            double newStdDev = Math.sqrt(alpha * variance + (1 - alpha) * Math.pow(oldStdDev, 2));
+            profile.setDataVolumeStdDev(newStdDev);
+        }
+    }
+    
+    private void updateLoginFrequencyStats(OcsfEvent event, UserProfile profile) {
+        if ("authentication".equals(event.getCategoryName())) {
+            // Update login count
+            int hour = (int) extractLoginHour(event);
+            
+            // Simple exponential moving average
+            double alpha = 2.0 / (SLIDING_WINDOW_DAYS + 1);
+            double oldAvg = profile.getAverageLoginsPerHour();
+            double newAvg = alpha * 1.0 + (1 - alpha) * oldAvg;
+            profile.setAverageLoginsPerHour(newAvg);
+            
+            // Update standard deviation
+            double variance = Math.pow(1.0 - newAvg, 2);
+            double oldStdDev = profile.getLoginFrequencyStdDev();
+            double newStdDev = Math.sqrt(alpha * variance + (1 - alpha) * Math.pow(oldStdDev, 2));
+            profile.setLoginFrequencyStdDev(newStdDev);
+        }
+    }
+    
+    private void updateKnownLocations(OcsfEvent event, UserProfile profile) {
+        String location = event.getMetadata() != null 
+            ? (String) event.getMetadata().get("src_location")
+            : null;
+        if (location != null && !profile.getKnownLocations().contains(location)) {
+            profile.getKnownLocations().add(location);
+            // Keep only last 50 locations
+            if (profile.getKnownLocations().size() > 50) {
+                profile.getKnownLocations().remove(0);
+            }
+        }
+    }
+    
+    private void updateKnownDevices(OcsfEvent event, UserProfile profile) {
+        String device = event.getMetadata() != null 
+            ? (String) event.getMetadata().get("device_id")
+            : null;
+        if (device != null && !profile.getKnownDevices().contains(device)) {
+            profile.getKnownDevices().add(device);
+            // Keep only last 20 devices
+            if (profile.getKnownDevices().size() > 20) {
+                profile.getKnownDevices().remove(0);
+            }
+        }
     }
 }
