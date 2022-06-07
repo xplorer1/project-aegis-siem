@@ -30,8 +30,13 @@ public class UebaScoringFunction extends ProcessFunction<OcsfEvent, OcsfEvent> {
     @Autowired
     private UserProfileRepository profileRepository;
     
+    @Autowired
+    private UebaMetrics metrics;
+    
     @Override
     public void processElement(OcsfEvent event, Context ctx, Collector<OcsfEvent> out) throws Exception {
+        io.micrometer.core.instrument.Timer.Sample scoringSample = metrics.startScoringTimer();
+        
         try {
             // Extract user ID from event
             String userId = extractUserId(event);
@@ -43,10 +48,14 @@ public class UebaScoringFunction extends ProcessFunction<OcsfEvent, OcsfEvent> {
             
             // Get or create user profile
             UserProfile profile = profileRepository.findById(userId)
-                .orElseGet(() -> createNewProfile(userId));
+                .orElseGet(() -> {
+                    metrics.recordProfileCreated();
+                    return createNewProfile(userId);
+                });
             
             // Score the event
             double anomalyScore = scorer.scoreEvent(event, profile);
+            metrics.recordEventScored();
             
             // Enrich event with UEBA score
             if (event.getMetadata() == null) {
@@ -58,10 +67,14 @@ public class UebaScoringFunction extends ProcessFunction<OcsfEvent, OcsfEvent> {
             Alert alert = scorer.checkAnomalyThreshold(event, profile, anomalyScore);
             if (alert != null) {
                 ctx.output(ALERT_OUTPUT, alert);
+                metrics.recordAnomalyDetected();
             }
             
             // Update user profile with new event data
+            io.micrometer.core.instrument.Timer.Sample updateSample = metrics.startProfileUpdateTimer();
             scorer.updateProfile(event, profile);
+            metrics.recordProfileUpdateLatency(updateSample);
+            metrics.recordProfileUpdated();
             
             // Emit enriched event
             out.collect(event);
@@ -70,6 +83,8 @@ public class UebaScoringFunction extends ProcessFunction<OcsfEvent, OcsfEvent> {
             logger.error("Error processing event for UEBA scoring", e);
             // Pass through event even on error
             out.collect(event);
+        } finally {
+            metrics.recordScoringLatency(scoringSample);
         }
     }
     
