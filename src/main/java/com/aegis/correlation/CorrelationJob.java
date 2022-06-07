@@ -4,11 +4,13 @@ import com.aegis.domain.Alert;
 import com.aegis.domain.OcsfEvent;
 import com.aegis.enrichment.TipClientRestImpl;
 import com.aegis.enrichment.TipEnrichmentFunction;
+import com.aegis.ueba.UebaScoringFunction;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.streaming.api.datastream.AsyncDataStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +53,9 @@ public class CorrelationJob {
     
     @Autowired
     private com.aegis.enrichment.EnrichmentMetrics enrichmentMetrics;
+    
+    @Autowired
+    private UebaScoringFunction uebaScoringFunction;
     
     /**
      * Initialize and start the Flink job after Spring context is ready.
@@ -102,24 +107,30 @@ public class CorrelationJob {
         ).name("TIP Enrichment")
          .uid("tip-enrichment");
         
-        // 3. TODO: Apply Sigma rules (will be added in future tasks)
-        // DataStream<Alert> sigmaAlerts = enrichedStream
+        // 3. Apply UEBA scoring for anomaly detection
+        SingleOutputStreamOperator<OcsfEvent> uebaStream = enrichedStream
+            .process(uebaScoringFunction)
+            .name("UEBA Scoring")
+            .uid("ueba-scoring");
+        
+        // Extract UEBA alerts from side output
+        DataStream<Alert> uebaAlerts = uebaStream
+            .getSideOutput(UebaScoringFunction.ALERT_OUTPUT)
+            .name("UEBA Alerts");
+        
+        // 4. TODO: Apply Sigma rules (will be added in future tasks)
+        // DataStream<Alert> sigmaAlerts = uebaStream
         //     .flatMap(new SigmaRuleProcessor())
         //     .name("Sigma Rule Detection");
         
-        // 4. TODO: Apply UEBA scoring (will be added in future tasks)
-        // DataStream<Alert> uebaAlerts = enrichedStream
-        //     .keyBy(event -> event.getActor().getUser())
-        //     .flatMap(new UebaScorer())
-        //     .name("UEBA Anomaly Detection");
+        // 5. Sink UEBA alerts to Kafka
+        uebaAlerts
+            .sinkTo(kafkaSink)
+            .name("Alert Sink")
+            .uid("alert-sink");
         
-        // 5. TODO: Merge alert streams and sink to Kafka
-        // sigmaAlerts.union(uebaAlerts)
-        //     .sinkTo(kafkaSink)
-        //     .name("Alert Sink");
+        log.info("Pipeline configured with TIP enrichment and UEBA scoring");
         
-        log.info("Pipeline configured with TIP enrichment");
-        
-        return enrichedStream;
+        return uebaStream;
     }
 }
