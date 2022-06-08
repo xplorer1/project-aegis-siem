@@ -4,10 +4,13 @@ import com.aegis.domain.Alert;
 import com.aegis.domain.AlertStatus;
 import com.aegis.domain.QueryResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.opensearch.action.index.IndexRequest;
+import org.opensearch.action.index.IndexResponse;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.client.RequestOptions;
 import org.opensearch.client.RestHighLevelClient;
+import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.search.SearchHit;
@@ -183,6 +186,33 @@ public class AlertRepository {
         } catch (Exception e) {
             logger.error("Failed to count alerts", e);
             throw new RuntimeException("Failed to count alerts", e);
+        }
+    }
+    
+    /**
+     * Save or update an alert
+     * 
+     * @param alert Alert to save
+     * @return Saved alert
+     */
+    public Alert save(Alert alert) {
+        try {
+            String alertJson = objectMapper.writeValueAsString(alert);
+            
+            IndexRequest request = new IndexRequest(ALERTS_INDEX)
+                .id(alert.getId())
+                .source(alertJson, XContentType.JSON);
+            
+            IndexResponse response = client.index(request, RequestOptions.DEFAULT);
+            
+            logger.debug("Saved alert {} with result: {}", 
+                alert.getId(), response.getResult());
+            
+            return alert;
+            
+        } catch (Exception e) {
+            logger.error("Failed to save alert: {}", alert.getId(), e);
+            throw new RuntimeException("Failed to save alert", e);
         }
     }
 }

@@ -7,6 +7,7 @@ import com.aegis.query.QueryExecutor;
 import com.aegis.storage.hot.AlertRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.graphql.data.method.annotation.Argument;
+import org.springframework.graphql.data.method.annotation.MutationMapping;
 import org.springframework.graphql.data.method.annotation.QueryMapping;
 import org.springframework.stereotype.Controller;
 import org.slf4j.Logger;
@@ -48,22 +49,36 @@ public class AegisGraphQLController {
     /**
      * Repository for querying and managing alerts in OpenSearch
      */
-    @Autowired
-    private AlertRepository alertRepository;
+    private final AlertRepository alertRepository;
     
     /**
      * Transpiler for converting AQL queries to tier-specific query formats
      * Used by searchEvents to execute queries across Hot/Warm/Cold tiers
      */
-    @Autowired
-    private AqlTranspiler aqlTranspiler;
+    private final AqlTranspiler aqlTranspiler;
     
     /**
      * Executor for running queries across multiple storage tiers
      * Handles concurrent execution and result merging
      */
+    private final QueryExecutor queryExecutor;
+    
+    /**
+     * Constructor with dependencies
+     * 
+     * @param aqlTranspiler AQL query transpiler
+     * @param queryExecutor Query executor for multi-tier queries
+     * @param alertRepository Alert repository for querying alerts
+     */
     @Autowired
-    private QueryExecutor queryExecutor;
+    public AegisGraphQLController(
+            AqlTranspiler aqlTranspiler,
+            QueryExecutor queryExecutor,
+            AlertRepository alertRepository) {
+        this.aqlTranspiler = aqlTranspiler;
+        this.queryExecutor = queryExecutor;
+        this.alertRepository = alertRepository;
+    }
     
     /**
      * Query alerts with optional filters
@@ -188,5 +203,39 @@ public class AegisGraphQLController {
             this.startTime = startTime;
             this.endTime = endTime;
         }
+    }
+    
+    /**
+     * Acknowledge an alert
+     * Updates the alert status to ACKNOWLEDGED and records the acknowledgment timestamp
+     * 
+     * @param alertId The unique identifier of the alert to acknowledge
+     * @return The updated alert
+     */
+    @MutationMapping
+    public Alert acknowledgeAlert(@Argument String alertId) {
+        logger.debug("acknowledgeAlert called with alertId={}", alertId);
+        
+        if (alertId == null || alertId.isEmpty()) {
+            throw new IllegalArgumentException("alertId is required");
+        }
+        
+        // Find the alert
+        Alert alert = alertRepository.findById(alertId);
+        
+        if (alert == null) {
+            logger.warn("Alert not found: {}", alertId);
+            throw new IllegalArgumentException("Alert not found: " + alertId);
+        }
+        
+        // Update alert status
+        alert.setStatus(AlertStatus.ACKNOWLEDGED);
+        alert.setAcknowledgedAt(Instant.now());
+        
+        // Save the updated alert
+        Alert updatedAlert = alertRepository.save(alert);
+        
+        logger.info("Alert {} acknowledged successfully", alertId);
+        return updatedAlert;
     }
 }
