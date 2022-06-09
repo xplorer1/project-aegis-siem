@@ -2,20 +2,26 @@ package com.aegis.graphql;
 
 import com.aegis.domain.Alert;
 import com.aegis.domain.AlertStatus;
+import com.aegis.domain.OcsfEvent;
 import com.aegis.query.AqlTranspiler;
 import com.aegis.query.QueryExecutor;
 import com.aegis.storage.hot.AlertRepository;
+import org.dataloader.DataLoader;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.graphql.data.method.annotation.Argument;
 import org.springframework.graphql.data.method.annotation.MutationMapping;
 import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.graphql.data.method.annotation.SchemaMapping;
+import org.springframework.graphql.execution.BatchLoaderRegistry;
 import org.springframework.stereotype.Controller;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -237,5 +243,57 @@ public class AegisGraphQLController {
         
         logger.info("Alert {} acknowledged successfully", alertId);
         return updatedAlert;
+    }
+    
+    /**
+     * Field resolver for Alert.events
+     * 
+     * This method is called by GraphQL when the 'events' field is requested on an Alert.
+     * It uses DataLoader to batch fetch events, preventing N+1 query problems.
+     * 
+     * Without DataLoader:
+     *   - Fetching 10 alerts with 5 events each = 1 + (10 * 5) = 51 queries
+     * 
+     * With DataLoader:
+     *   - Fetching 10 alerts with 5 events each = 1 + 1 = 2 queries
+     *   - All event IDs are collected and fetched in a single batch
+     * 
+     * @param alert The parent Alert object
+     * @param dataLoader The DataLoader for batching event fetches
+     * @return CompletableFuture containing the list of events
+     */
+    @SchemaMapping(typeName = "Alert", field = "events")
+    public CompletableFuture<List<OcsfEvent>> getAlertEvents(
+            Alert alert,
+            DataLoader<String, OcsfEvent> dataLoader) {
+        
+        logger.debug("Resolving events for alert {} with {} event IDs", 
+            alert.getId(), alert.getEventIds() != null ? alert.getEventIds().size() : 0);
+        
+        // If no event IDs, return empty list
+        if (alert.getEventIds() == null || alert.getEventIds().isEmpty()) {
+            return CompletableFuture.completedFuture(new ArrayList<>());
+        }
+        
+        // Load all events using DataLoader
+        // DataLoader will batch these requests and fetch all events in a single query
+        List<CompletableFuture<OcsfEvent>> eventFutures = new ArrayList<>();
+        for (String eventId : alert.getEventIds()) {
+            eventFutures.add(dataLoader.load(eventId));
+        }
+        
+        // Combine all futures into a single future that returns a list
+        return CompletableFuture.allOf(eventFutures.toArray(new CompletableFuture[0]))
+            .thenApply(v -> {
+                List<OcsfEvent> events = new ArrayList<>();
+                for (CompletableFuture<OcsfEvent> future : eventFutures) {
+                    OcsfEvent event = future.join();
+                    if (event != null) {
+                        events.add(event);
+                    }
+                }
+                logger.debug("Resolved {} events for alert {}", events.size(), alert.getId());
+                return events;
+            });
     }
 }

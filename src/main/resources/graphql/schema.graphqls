@@ -155,6 +155,9 @@ type Alert {
   # IDs of events that triggered this alert
   eventIds: [String!]!
   
+  # Events that triggered this alert (resolved via DataLoader)
+  events: [Event]!
+  
   # Current status of the alert
   status: AlertStatus!
   

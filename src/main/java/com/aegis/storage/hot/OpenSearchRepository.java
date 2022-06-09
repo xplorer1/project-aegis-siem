@@ -344,4 +344,57 @@ public class OpenSearchRepository {
     public java.util.Map<String, Long> getTopSourceIps(int size) {
         return aggregateByField("src_endpoint.ip", size);
     }
+    
+    /**
+     * Fetch events by IDs in batch
+     * This method is optimized for DataLoader to reduce N+1 query problems
+     * 
+     * @param eventIds List of event IDs to fetch
+     * @return List of events in the same order as the input IDs
+     */
+    public List<OcsfEvent> findByIds(List<String> eventIds) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        try {
+            // Build IDs query
+            QueryBuilder query = QueryBuilders.idsQuery().addIds(eventIds.toArray(new String[0]));
+            
+            SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+                .query(query)
+                .size(eventIds.size());
+            
+            SearchRequest request = new SearchRequest(INDEX_PATTERN)
+                .source(sourceBuilder);
+            
+            SearchResponse response = client.search(request, RequestOptions.DEFAULT);
+            
+            // Create a map for quick lookup
+            java.util.Map<String, OcsfEvent> eventMap = new java.util.HashMap<>();
+            for (SearchHit hit : response.getHits().getHits()) {
+                OcsfEvent event = objectMapper.readValue(
+                    hit.getSourceAsString(), 
+                    OcsfEvent.class
+                );
+                eventMap.put(hit.getId(), event);
+            }
+            
+            // Return events in the same order as requested IDs
+            // This is important for DataLoader to match results with keys
+            List<OcsfEvent> orderedEvents = new ArrayList<>();
+            for (String id : eventIds) {
+                orderedEvents.add(eventMap.get(id));
+            }
+            
+            logger.debug("Batch fetched {} events out of {} requested IDs", 
+                eventMap.size(), eventIds.size());
+            
+            return orderedEvents;
+            
+        } catch (Exception e) {
+            logger.error("Batch fetch by IDs failed", e);
+            throw new RuntimeException("Batch fetch by IDs failed", e);
+        }
+    }
 }

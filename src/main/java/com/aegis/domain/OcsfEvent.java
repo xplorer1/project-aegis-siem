@@ -47,6 +47,10 @@ public class OcsfEvent {
     @JsonProperty("ueba_score")
     private Double uebaScore;
     
+    @Field(type = FieldType.Object)
+    @JsonProperty("metadata")
+    private java.util.Map<String, Object> metadata;
+    
     /**
      * Default constructor for Jackson deserialization
      */
@@ -124,5 +128,13 @@ public class OcsfEvent {
     
     public void setUebaScore(Double uebaScore) {
         this.uebaScore = uebaScore;
+    }
+    
+    public java.util.Map<String, Object> getMetadata() {
+        return metadata;
+    }
+    
+    public void setMetadata(java.util.Map<String, Object> metadata) {
+        this.metadata = metadata;
     }
 }

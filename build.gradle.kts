@@ -104,6 +104,9 @@ dependencies {
     // GraphQL Java Extended Scalars for custom scalar types
     implementation("com.graphql-java:graphql-java-extended-scalars:21.0")
     
+    // DataLoader for batching and caching GraphQL queries (Task 18.12)
+    implementation("com.graphql-java:java-dataloader:3.2.0")
+    
     // gRPC dependencies (Task 1.13)
     // gRPC Spring Boot Starter for high-performance RPC
     implementation("net.devh:grpc-spring-boot-starter:2.15.0.RELEASE")
