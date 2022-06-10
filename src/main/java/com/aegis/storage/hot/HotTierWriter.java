@@ -2,12 +2,23 @@ package com.aegis.storage.hot;
 
 import com.aegis.domain.OcsfEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.opensearch.action.bulk.BulkProcessor;
+import org.opensearch.action.bulk.BulkRequest;
+import org.opensearch.action.bulk.BulkResponse;
+import org.opensearch.action.index.IndexRequest;
+import org.opensearch.client.RequestOptions;
 import org.opensearch.client.RestHighLevelClient;
+import org.opensearch.common.xcontent.XContentType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
 
 /**
  * Writes normalized events to OpenSearch hot tier storage
@@ -48,12 +59,45 @@ public class HotTierWriter {
     
     /**
      * Index an event to OpenSearch
-     * Placeholder - will be implemented in next task
      * 
      * @param event The event to index
      */
     private void index(OcsfEvent event) {
-        // Placeholder - implementation in next task
-        logger.debug("Indexing event: {}", event.getClassName());
+        try {
+            // Generate index name with date
+            String indexName = generateIndexName(event.getTime());
+            
+            // Convert event to JSON
+            String json = objectMapper.writeValueAsString(event);
+            
+            // Create index request
+            IndexRequest request = new IndexRequest(indexName)
+                .id(UUID.randomUUID().toString())
+                .source(json, XContentType.JSON);
+            
+            // Execute index request
+            var response = client.index(request, RequestOptions.DEFAULT);
+            
+            logger.debug("Indexed event to {}: {}", indexName, response.getId());
+            
+        } catch (Exception e) {
+            logger.error("Failed to index event", e);
+            throw new RuntimeException("Event indexing failed", e);
+        }
+    }
+    
+    /**
+     * Generate index name with date suffix
+     * Format: aegis-events-YYYY-MM-DD
+     * 
+     * @param timestamp Event timestamp in milliseconds
+     * @return Index name
+     */
+    private String generateIndexName(long timestamp) {
+        Instant instant = Instant.ofEpochMilli(timestamp);
+        String date = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+            .withZone(ZoneOffset.UTC)
+            .format(instant);
+        return "aegis-events-" + date;
     }
 }
