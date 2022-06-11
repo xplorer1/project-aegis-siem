@@ -22,17 +22,76 @@ import java.util.UUID;
 
 /**
  * Writes normalized events to OpenSearch hot tier storage
- * Consumes events from Kafka and indexes them in OpenSearch
+ * Consumes events from Kafka and indexes them in OpenSearch using bulk API
  */
 @Service
 public class HotTierWriter {
     private static final Logger logger = LoggerFactory.getLogger(HotTierWriter.class);
+    private static final int BULK_SIZE = 1000;
+    private static final int BULK_FLUSH_INTERVAL_MS = 5000;
     
     @Autowired
     private RestHighLevelClient client;
     
     @Autowired
     private ObjectMapper objectMapper;
+    
+    private BulkProcessor bulkProcessor;
+    
+    /**
+     * Initialize bulk processor on startup
+     */
+    @javax.annotation.PostConstruct
+    public void init() {
+        bulkProcessor = BulkProcessor.builder(
+            (request, bulkListener) -> 
+                client.bulkAsync(request, RequestOptions.DEFAULT, bulkListener),
+            new BulkProcessor.Listener() {
+                @Override
+                public void beforeBulk(long executionId, BulkRequest request) {
+                    logger.debug("Executing bulk request {} with {} actions", 
+                        executionId, request.numberOfActions());
+                }
+                
+                @Override
+                public void afterBulk(long executionId, BulkRequest request, BulkResponse response) {
+                    if (response.hasFailures()) {
+                        logger.error("Bulk request {} had failures: {}", 
+                            executionId, response.buildFailureMessage());
+                    } else {
+                        logger.debug("Bulk request {} completed successfully in {} ms", 
+                            executionId, response.getTook().millis());
+                    }
+                }
+                
+                @Override
+                public void afterBulk(long executionId, BulkRequest request, Throwable failure) {
+                    logger.error("Bulk request {} failed", executionId, failure);
+                }
+            })
+            .setBulkActions(BULK_SIZE)
+            .setFlushInterval(org.opensearch.core.common.unit.TimeValue.timeValueMillis(BULK_FLUSH_INTERVAL_MS))
+            .build();
+        
+        logger.info("Bulk processor initialized: size={}, flush_interval={}ms", 
+            BULK_SIZE, BULK_FLUSH_INTERVAL_MS);
+    }
+    
+    /**
+     * Clean up bulk processor on shutdown
+     */
+    @javax.annotation.PreDestroy
+    public void cleanup() {
+        if (bulkProcessor != null) {
+            try {
+                bulkProcessor.flush();
+                bulkProcessor.close();
+                logger.info("Bulk processor closed");
+            } catch (Exception e) {
+                logger.error("Error closing bulk processor", e);
+            }
+        }
+    }
     
     /**
      * Consume normalized events from Kafka and index to OpenSearch
@@ -58,7 +117,7 @@ public class HotTierWriter {
     }
     
     /**
-     * Index an event to OpenSearch
+     * Index an event to OpenSearch using bulk processor
      * Automatically rotates indices daily based on event timestamp
      * 
      * @param event The event to index
@@ -76,14 +135,13 @@ public class HotTierWriter {
                 .id(UUID.randomUUID().toString())
                 .source(json, XContentType.JSON);
             
-            // Execute index request
-            // Index will be created automatically if it doesn't exist
-            var response = client.index(request, RequestOptions.DEFAULT);
+            // Add to bulk processor for batched indexing
+            bulkProcessor.add(request);
             
-            logger.debug("Indexed event to {}: {}", indexName, response.getId());
+            logger.trace("Added event to bulk processor for index: {}", indexName);
             
         } catch (Exception e) {
-            logger.error("Failed to index event", e);
+            logger.error("Failed to add event to bulk processor", e);
             throw new RuntimeException("Event indexing failed", e);
         }
     }
