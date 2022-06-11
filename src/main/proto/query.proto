@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.aegis.query.grpc.proto";
+option java_outer_classname = "QueryProto";
+
+package aegis.query;
+
+// Query Service for executing AQL queries via gRPC
+service QueryService {
+  // Execute an AQL query and return results
+  rpc ExecuteQuery(QueryRequest) returns (QueryResponse);
+  
+  // Execute an AQL query with server-side streaming for large result sets
+  rpc ExecuteQueryStream(QueryRequest) returns (stream QueryResponse);
+}
+
+// Request to execute an AQL query
+message QueryRequest {
+  // Tenant identifier for multi-tenant isolation
+  string tenant_id = 1;
+  
+  // AQL query string (e.g., "source=* last 24h | where severity > 3 | stats count() by actor.user")
+  string query = 2;
+  
+  // Time range specification (e.g., "last 24h", "last 7d")
+  // Can also use absolute timestamps
+  string time_range = 3;
+  
+  // Maximum number of results to return (default: 100, max: 10000)
+  int32 limit = 4;
+  
+  // Offset for pagination
+  int32 offset = 5;
+  
+  // Optional timeout in seconds for query execution
+  int32 timeout_seconds = 6;
+}
+
+// Response containing query results
+message QueryResponse {
+  // Status code (0 = success, non-zero = error)
+  int32 code = 1;
+  
+  // Status message
+  string message = 2;
+  
+  // List of events matching the query
+  repeated Event events = 3;
+  
+  // Total number of matching events (may be greater than returned events)
+  int64 total_count = 4;
+  
+  // Query execution time in milliseconds
+  int64 execution_time_ms = 5;
+  
+  // Storage tiers queried (HOT, WARM, COLD)
+  repeated string tiers_queried = 6;
+  
+  // Cursor for pagination (if more results available)
+  string cursor = 7;
+  
+  // Optional error details
+  string error_details = 8;
+}
+
+// Represents a normalized security event in OCSF format
+message Event {
+  // Unique identifier for the event
+  string id = 1;
+  
+  // Event timestamp (Unix epoch milliseconds)
+  int64 time = 2;
+  
+  // Tenant identifier
+  string tenant_id = 3;
+  
+  // Event severity (1=Info, 2=Low, 3=Medium, 4=High, 5=Critical)
+  int32 severity = 4;
+  
+  // OCSF class identifier
+  int32 class_uid = 5;
+  
+  // OCSF category identifier
+  int32 category_uid = 6;
+  
+  // Actor who performed the action
+  Actor actor = 7;
+  
+  // Source endpoint information
+  Endpoint src_endpoint = 8;
+  
+  // Destination endpoint information
+  Endpoint dst_endpoint = 9;
+  
+  // Human-readable event message
+  string message = 10;
+  
+  // Original raw event data
+  string raw_data = 11;
+  
+  // Threat intelligence enrichment data
+  ThreatInfo threat_info = 12;
+  
+  // UEBA anomaly score (0.0 to 1.0)
+  double ueba_score = 13;
+  
+  // Additional metadata as key-value pairs
+  map<string, string> metadata = 14;
+}
+
+// Represents an actor (user, process, or service) in a security event
+message Actor {
+  // Username or service account
+  string user = 1;
+  
+  // Process name or path
+  string process = 2;
+  
+  // Session identifier
+  string session = 3;
+}
+
+// Represents a network endpoint (source or destination)
+message Endpoint {
+  // IP address (IPv4 or IPv6)
+  string ip = 1;
+  
+  // Port number
+  int32 port = 2;
+  
+  // Hostname or FQDN
+  string hostname = 3;
+  
+  // MAC address
+  string mac = 4;
+}
+
+// Threat intelligence information for an indicator
+message ThreatInfo {
+  // Indicator value (IP, domain, hash, etc.)
+  string indicator = 1;
+  
+  // Reputation score (0-100, higher is more malicious)
+  int32 reputation_score = 2;
+  
+  // Threat categories
+  repeated string categories = 3;
+  
+  // First seen timestamp (Unix epoch milliseconds)
+  int64 first_seen = 4;
+  
+  // Last seen timestamp (Unix epoch milliseconds)
+  int64 last_seen = 5;
+}
