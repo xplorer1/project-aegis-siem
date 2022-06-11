@@ -59,12 +59,13 @@ public class HotTierWriter {
     
     /**
      * Index an event to OpenSearch
+     * Automatically rotates indices daily based on event timestamp
      * 
      * @param event The event to index
      */
     private void index(OcsfEvent event) {
         try {
-            // Generate index name with date
+            // Generate index name with date - provides automatic daily rotation
             String indexName = generateIndexName(event.getTime());
             
             // Convert event to JSON
@@ -76,6 +77,7 @@ public class HotTierWriter {
                 .source(json, XContentType.JSON);
             
             // Execute index request
+            // Index will be created automatically if it doesn't exist
             var response = client.index(request, RequestOptions.DEFAULT);
             
             logger.debug("Indexed event to {}: {}", indexName, response.getId());
@@ -87,11 +89,16 @@ public class HotTierWriter {
     }
     
     /**
-     * Generate index name with date suffix
+     * Generate index name with date suffix for daily rotation
      * Format: aegis-events-YYYY-MM-DD
      * 
+     * This provides automatic daily index rotation:
+     * - Events are indexed to date-specific indices
+     * - New indices are created automatically each day
+     * - Enables efficient time-based queries and retention management
+     * 
      * @param timestamp Event timestamp in milliseconds
-     * @return Index name
+     * @return Index name with date suffix
      */
     private String generateIndexName(long timestamp) {
         Instant instant = Instant.ofEpochMilli(timestamp);
