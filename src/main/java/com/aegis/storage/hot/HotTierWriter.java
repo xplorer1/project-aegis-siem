@@ -36,6 +36,9 @@ public class HotTierWriter {
     @Autowired
     private ObjectMapper objectMapper;
     
+    @Autowired
+    private IndexingMetrics metrics;
+    
     private BulkProcessor bulkProcessor;
     
     /**
@@ -55,13 +58,34 @@ public class HotTierWriter {
                 
                 @Override
                 public void afterBulk(long executionId, BulkRequest request, BulkResponse response) {
+                    // Record bulk latency
+                    metrics.recordBulkLatency(response.getTook().millis());
+                    
                     if (response.hasFailures()) {
                         logger.error("Bulk request {} had failures: {}", 
                             executionId, response.buildFailureMessage());
                         
+                        // Count successful and failed documents
+                        int successCount = 0;
+                        int failureCount = 0;
+                        for (var item : response.getItems()) {
+                            if (item.isFailed()) {
+                                failureCount++;
+                                metrics.recordIndexingError();
+                            } else {
+                                successCount++;
+                            }
+                        }
+                        
+                        metrics.recordDocumentsIndexed(successCount);
+                        logger.info("Bulk request {}: {} succeeded, {} failed", 
+                            executionId, successCount, failureCount);
+                        
                         // Handle partial failures - retry failed documents
                         handlePartialFailures(request, response);
                     } else {
+                        // All documents indexed successfully
+                        metrics.recordDocumentsIndexed(response.getItems().length);
                         logger.debug("Bulk request {} completed successfully in {} ms", 
                             executionId, response.getTook().millis());
                     }
@@ -229,9 +253,11 @@ public class HotTierWriter {
         
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
+                metrics.recordRetry();
                 Thread.sleep(retryDelay * attempt);
                 
                 var response = client.index(request, RequestOptions.DEFAULT);
+                metrics.recordDocumentIndexed();
                 logger.info("Successfully retried document {} on attempt {}", 
                     response.getId(), attempt);
                 return;
@@ -241,6 +267,7 @@ public class HotTierWriter {
                     attempt, e.getMessage());
                 
                 if (attempt == maxRetries) {
+                    metrics.recordIndexingError();
                     logger.error("Max retries exceeded for document", e);
                     // TODO: Send to dead letter queue
                 }
