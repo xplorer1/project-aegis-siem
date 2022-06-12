@@ -58,6 +58,9 @@ public class HotTierWriter {
                     if (response.hasFailures()) {
                         logger.error("Bulk request {} had failures: {}", 
                             executionId, response.buildFailureMessage());
+                        
+                        // Handle partial failures - retry failed documents
+                        handlePartialFailures(request, response);
                     } else {
                         logger.debug("Bulk request {} completed successfully in {} ms", 
                             executionId, response.getTook().millis());
@@ -71,6 +74,10 @@ public class HotTierWriter {
             })
             .setBulkActions(BULK_SIZE)
             .setFlushInterval(org.opensearch.core.common.unit.TimeValue.timeValueMillis(BULK_FLUSH_INTERVAL_MS))
+            .setConcurrentRequests(1)
+            .setBackoffPolicy(
+                org.opensearch.action.bulk.BackoffPolicy.exponentialBackoff(
+                    org.opensearch.core.common.unit.TimeValue.timeValueMillis(100), 3))
             .build();
         
         logger.info("Bulk processor initialized: size={}, flush_interval={}ms", 
@@ -164,5 +171,80 @@ public class HotTierWriter {
             .withZone(ZoneOffset.UTC)
             .format(instant);
         return "aegis-events-" + date;
+    }
+    
+    /**
+     * Handle partial failures in bulk response
+     * Retry failed documents up to 3 times
+     * 
+     * @param request Original bulk request
+     * @param response Bulk response with failures
+     */
+    private void handlePartialFailures(BulkRequest request, BulkResponse response) {
+        for (int i = 0; i < response.getItems().length; i++) {
+            var item = response.getItems()[i];
+            
+            if (item.isFailed()) {
+                var failure = item.getFailure();
+                logger.warn("Failed to index document {}: {}", 
+                    item.getId(), failure.getMessage());
+                
+                // Check if error is retryable
+                if (isRetryable(failure)) {
+                    // Get original request
+                    var originalRequest = request.requests().get(i);
+                    
+                    if (originalRequest instanceof IndexRequest) {
+                        retryIndexRequest((IndexRequest) originalRequest);
+                    }
+                } else {
+                    logger.error("Non-retryable error for document {}: {}", 
+                        item.getId(), failure.getMessage());
+                    // TODO: Send to dead letter queue
+                }
+            }
+        }
+    }
+    
+    /**
+     * Check if a failure is retryable
+     */
+    private boolean isRetryable(org.opensearch.action.bulk.BulkItemResponse.Failure failure) {
+        String message = failure.getMessage().toLowerCase();
+        
+        // Retryable errors
+        return message.contains("timeout") ||
+               message.contains("unavailable") ||
+               message.contains("too many requests") ||
+               message.contains("circuit breaker");
+    }
+    
+    /**
+     * Retry a failed index request
+     * Uses exponential backoff with max 3 retries
+     */
+    private void retryIndexRequest(IndexRequest request) {
+        int maxRetries = 3;
+        int retryDelay = 100; // ms
+        
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                Thread.sleep(retryDelay * attempt);
+                
+                var response = client.index(request, RequestOptions.DEFAULT);
+                logger.info("Successfully retried document {} on attempt {}", 
+                    response.getId(), attempt);
+                return;
+                
+            } catch (Exception e) {
+                logger.warn("Retry attempt {} failed for document: {}", 
+                    attempt, e.getMessage());
+                
+                if (attempt == maxRetries) {
+                    logger.error("Max retries exceeded for document", e);
+                    // TODO: Send to dead letter queue
+                }
+            }
+        }
     }
 }
