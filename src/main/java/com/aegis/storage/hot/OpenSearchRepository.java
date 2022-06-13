@@ -143,4 +143,82 @@ public class OpenSearchRepository {
         QueryBuilder query = QueryBuilders.termQuery("src_endpoint.ip", ip);
         return search(query, from, size);
     }
+    
+    /**
+     * Full-text search across event messages
+     * Uses match query with highlighting
+     * 
+     * @param searchText Text to search for
+     * @param from Starting offset
+     * @param size Number of results
+     * @return Query result with events
+     */
+    public QueryResult<OcsfEvent> fullTextSearch(
+            String searchText, int from, int size) {
+        
+        try {
+            // Build multi-match query across multiple fields
+            QueryBuilder query = QueryBuilders.multiMatchQuery(searchText)
+                .field("message", 2.0f)  // Boost message field
+                .field("category_name")
+                .field("class_name")
+                .field("actor.user.name")
+                .field("src_endpoint.hostname")
+                .field("dst_endpoint.hostname")
+                .type(org.opensearch.index.query.MultiMatchQueryBuilder.Type.BEST_FIELDS)
+                .fuzziness(org.opensearch.common.unit.Fuzziness.AUTO);
+            
+            SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+                .query(query)
+                .from(from)
+                .size(size)
+                .sort("time", SortOrder.DESC)
+                // Add highlighting
+                .highlighter(new org.opensearch.search.fetch.subphase.highlight.HighlightBuilder()
+                    .field("message")
+                    .preTags("<em>")
+                    .postTags("</em>")
+                    .fragmentSize(150)
+                    .numOfFragments(3));
+            
+            SearchRequest request = new SearchRequest(INDEX_PATTERN)
+                .source(sourceBuilder);
+            
+            SearchResponse response = client.search(request, RequestOptions.DEFAULT);
+            
+            List<OcsfEvent> events = new ArrayList<>();
+            for (SearchHit hit : response.getHits().getHits()) {
+                OcsfEvent event = objectMapper.readValue(
+                    hit.getSourceAsString(), 
+                    OcsfEvent.class
+                );
+                
+                // Add highlights to metadata
+                if (hit.getHighlightFields().containsKey("message")) {
+                    var highlights = hit.getHighlightFields().get("message");
+                    if (event.getMetadata() == null) {
+                        event.setMetadata(new java.util.HashMap<>());
+                    }
+                    event.getMetadata().put("highlights", 
+                        java.util.Arrays.toString(highlights.fragments()));
+                }
+                
+                events.add(event);
+            }
+            
+            QueryResult<OcsfEvent> result = new QueryResult<>();
+            result.setResults(events);
+            result.setTotal(response.getHits().getTotalHits().value);
+            result.setTookMs(response.getTook().millis());
+            
+            logger.debug("Full-text search for '{}' returned {} results in {} ms", 
+                searchText, events.size(), response.getTook().millis());
+            
+            return result;
+            
+        } catch (Exception e) {
+            logger.error("Full-text search failed", e);
+            throw new RuntimeException("Full-text search failed", e);
+        }
+    }
 }
