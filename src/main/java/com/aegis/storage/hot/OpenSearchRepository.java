@@ -221,4 +221,127 @@ public class OpenSearchRepository {
             throw new RuntimeException("Full-text search failed", e);
         }
     }
+    
+    /**
+     * Aggregate events by field (terms aggregation)
+     * 
+     * @param field Field to aggregate on
+     * @param size Number of buckets
+     * @return Map of field values to document counts
+     */
+    public java.util.Map<String, Long> aggregateByField(String field, int size) {
+        try {
+            SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+                .query(QueryBuilders.matchAllQuery())
+                .size(0)  // Don't return documents, only aggregations
+                .aggregation(
+                    org.opensearch.search.aggregations.AggregationBuilders
+                        .terms("by_field")
+                        .field(field)
+                        .size(size)
+                );
+            
+            SearchRequest request = new SearchRequest(INDEX_PATTERN)
+                .source(sourceBuilder);
+            
+            SearchResponse response = client.search(request, RequestOptions.DEFAULT);
+            
+            var aggregation = (org.opensearch.search.aggregations.bucket.terms.Terms) 
+                response.getAggregations().get("by_field");
+            
+            java.util.Map<String, Long> results = new java.util.LinkedHashMap<>();
+            for (var bucket : aggregation.getBuckets()) {
+                results.put(bucket.getKeyAsString(), bucket.getDocCount());
+            }
+            
+            logger.debug("Aggregation on {} returned {} buckets", field, results.size());
+            return results;
+            
+        } catch (Exception e) {
+            logger.error("Aggregation failed", e);
+            throw new RuntimeException("Aggregation failed", e);
+        }
+    }
+    
+    /**
+     * Aggregate events by time (date histogram)
+     * 
+     * @param interval Time interval (e.g., "1h", "1d")
+     * @param startTime Start timestamp (epoch millis)
+     * @param endTime End timestamp (epoch millis)
+     * @return Map of timestamps to document counts
+     */
+    public java.util.Map<Long, Long> aggregateByTime(
+            String interval, long startTime, long endTime) {
+        
+        try {
+            QueryBuilder query = QueryBuilders.rangeQuery("time")
+                .gte(startTime)
+                .lte(endTime);
+            
+            SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+                .query(query)
+                .size(0)
+                .aggregation(
+                    org.opensearch.search.aggregations.AggregationBuilders
+                        .dateHistogram("by_time")
+                        .field("time")
+                        .calendarInterval(
+                            new org.opensearch.search.aggregations.bucket.histogram.DateHistogramInterval(interval))
+                        .minDocCount(0)
+                );
+            
+            SearchRequest request = new SearchRequest(INDEX_PATTERN)
+                .source(sourceBuilder);
+            
+            SearchResponse response = client.search(request, RequestOptions.DEFAULT);
+            
+            var aggregation = (org.opensearch.search.aggregations.bucket.histogram.Histogram) 
+                response.getAggregations().get("by_time");
+            
+            java.util.Map<Long, Long> results = new java.util.LinkedHashMap<>();
+            for (var bucket : aggregation.getBuckets()) {
+                long timestamp = ((org.joda.time.DateTime) bucket.getKey()).getMillis();
+                results.put(timestamp, bucket.getDocCount());
+            }
+            
+            logger.debug("Time aggregation with interval {} returned {} buckets", 
+                interval, results.size());
+            return results;
+            
+        } catch (Exception e) {
+            logger.error("Time aggregation failed", e);
+            throw new RuntimeException("Time aggregation failed", e);
+        }
+    }
+    
+    /**
+     * Get top N categories by event count
+     * 
+     * @param size Number of categories to return
+     * @return Map of categories to counts
+     */
+    public java.util.Map<String, Long> getTopCategories(int size) {
+        return aggregateByField("category_name", size);
+    }
+    
+    /**
+     * Get top N users by event count
+     * 
+     * @param size Number of users to return
+     * @return Map of user IDs to counts
+     */
+    public java.util.Map<String, Long> getTopUsers(int size) {
+        return aggregateByField("actor.user.uid", size);
+    }
+    
+    /**
+     * Get top N source IPs by event count
+     * 
+     * @param size Number of IPs to return
+     * @return Map of IPs to counts
+     */
+    public java.util.Map<String, Long> getTopSourceIps(int size) {
+        return aggregateByField("src_endpoint.ip", size);
+    }
 }
