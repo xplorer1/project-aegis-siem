@@ -35,7 +35,7 @@ public class ClickHouseSchemaManager {
     }
     
     /**
-     * Create aegis_events_warm table
+     * Create aegis_events_warm table with partitioning and TTL
      */
     private void createEventsWarmTable() {
         String sql = """
@@ -61,11 +61,13 @@ public class ClickHouseSchemaManager {
                 event_date Date MATERIALIZED toDate(time)
             )
             ENGINE = MergeTree()
+            PARTITION BY toYYYYMM(event_date)
             ORDER BY (tenant_id, event_date, time)
+            TTL event_date + INTERVAL 90 DAY
             SETTINGS index_granularity = 8192
             """;
         
         jdbcTemplate.execute(sql);
-        logger.info("Created table: aegis_events_warm");
+        logger.info("Created table: aegis_events_warm with monthly partitioning and 90-day TTL");
     }
 }
