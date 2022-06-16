@@ -27,6 +27,7 @@ public class ClickHouseSchemaManager {
     public void createTables() {
         try {
             createEventsWarmTable();
+            createHourlyAggregationView();
             logger.info("ClickHouse schema initialized successfully");
         } catch (Exception e) {
             logger.error("Failed to initialize ClickHouse schema", e);
@@ -69,5 +70,51 @@ public class ClickHouseSchemaManager {
         
         jdbcTemplate.execute(sql);
         logger.info("Created table: aegis_events_warm with monthly partitioning and 90-day TTL");
+    }
+    
+    /**
+     * Create materialized view for hourly aggregations
+     */
+    private void createHourlyAggregationView() {
+        // First create the target table for the materialized view
+        String targetTableSql = """
+            CREATE TABLE IF NOT EXISTS aegis_events_hourly (
+                event_hour DateTime,
+                tenant_id LowCardinality(String),
+                category_name LowCardinality(String),
+                severity UInt8,
+                event_count UInt64,
+                unique_users UInt64,
+                unique_src_ips UInt64,
+                avg_ueba_score Float32
+            )
+            ENGINE = SummingMergeTree()
+            PARTITION BY toYYYYMM(event_hour)
+            ORDER BY (tenant_id, event_hour, category_name, severity)
+            TTL event_hour + INTERVAL 180 DAY
+            """;
+        
+        jdbcTemplate.execute(targetTableSql);
+        logger.info("Created table: aegis_events_hourly");
+        
+        // Create materialized view
+        String viewSql = """
+            CREATE MATERIALIZED VIEW IF NOT EXISTS aegis_events_hourly_mv
+            TO aegis_events_hourly
+            AS SELECT
+                toStartOfHour(time) AS event_hour,
+                tenant_id,
+                category_name,
+                severity,
+                count() AS event_count,
+                uniq(actor_user_uid) AS unique_users,
+                uniq(src_endpoint_ip) AS unique_src_ips,
+                avg(ueba_score) AS avg_ueba_score
+            FROM aegis_events_warm
+            GROUP BY event_hour, tenant_id, category_name, severity
+            """;
+        
+        jdbcTemplate.execute(viewSql);
+        logger.info("Created materialized view: aegis_events_hourly_mv");
     }
 }
