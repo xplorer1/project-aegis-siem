@@ -62,7 +62,7 @@ public class WarmTierMigrator {
     
     /**
      * Migrate events from hot to warm tier
-     * Exports events from OpenSearch and imports to ClickHouse
+     * Exports events from OpenSearch using scroll API and imports to ClickHouse
      */
     private void migrateToWarm() {
         try {
@@ -72,37 +72,62 @@ public class WarmTierMigrator {
             Instant cutoffTime = Instant.now().minus(migrationAgeDays, ChronoUnit.DAYS);
             long cutoffMillis = cutoffTime.toEpochMilli();
             
-            // Build query for old events
-            SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-                .query(QueryBuilders.rangeQuery("time").lt(cutoffMillis))
-                .size(1000)  // Batch size
-                .sort("time", org.opensearch.search.sort.SortOrder.ASC);
+            // Use scroll API for large result sets
+            int totalMigrated = 0;
+            String scrollId = null;
             
-            SearchRequest searchRequest = new SearchRequest("aegis-events-*")
-                .source(sourceBuilder);
-            
-            // Execute search
-            SearchResponse response = openSearchClient.search(searchRequest, RequestOptions.DEFAULT);
-            
-            if (response.getHits().getTotalHits().value == 0) {
-                logger.info("No events to migrate");
-                return;
+            try {
+                // Initial search request with scroll
+                SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
+                    .query(QueryBuilders.rangeQuery("time").lt(cutoffMillis))
+                    .size(1000)  // Batch size per scroll
+                    .sort("time", org.opensearch.search.sort.SortOrder.ASC);
+                
+                SearchRequest searchRequest = new SearchRequest("aegis-events-*")
+                    .source(sourceBuilder)
+                    .scroll(org.opensearch.common.unit.TimeValue.timeValueMinutes(5));
+                
+                SearchResponse response = openSearchClient.search(searchRequest, RequestOptions.DEFAULT);
+                scrollId = response.getScrollId();
+                
+                // Process first batch
+                while (response.getHits().getHits().length > 0) {
+                    List<OcsfEvent> events = new ArrayList<>();
+                    for (SearchHit hit : response.getHits().getHits()) {
+                        OcsfEvent event = objectMapper.readValue(
+                            hit.getSourceAsString(),
+                            OcsfEvent.class
+                        );
+                        events.add(event);
+                    }
+                    
+                    // Insert batch to ClickHouse
+                    insertToClickHouse(events);
+                    totalMigrated += events.size();
+                    
+                    logger.debug("Migrated batch of {} events (total: {})", 
+                        events.size(), totalMigrated);
+                    
+                    // Get next batch using scroll
+                    org.opensearch.action.search.SearchScrollRequest scrollRequest = 
+                        new org.opensearch.action.search.SearchScrollRequest(scrollId);
+                    scrollRequest.scroll(org.opensearch.common.unit.TimeValue.timeValueMinutes(5));
+                    
+                    response = openSearchClient.scroll(scrollRequest, RequestOptions.DEFAULT);
+                    scrollId = response.getScrollId();
+                }
+                
+                logger.info("Migrated {} events to warm tier", totalMigrated);
+                
+            } finally {
+                // Clear scroll context
+                if (scrollId != null) {
+                    org.opensearch.action.search.ClearScrollRequest clearScrollRequest = 
+                        new org.opensearch.action.search.ClearScrollRequest();
+                    clearScrollRequest.addScrollId(scrollId);
+                    openSearchClient.clearScroll(clearScrollRequest, RequestOptions.DEFAULT);
+                }
             }
-            
-            // Parse events
-            List<OcsfEvent> events = new ArrayList<>();
-            for (SearchHit hit : response.getHits().getHits()) {
-                OcsfEvent event = objectMapper.readValue(
-                    hit.getSourceAsString(),
-                    OcsfEvent.class
-                );
-                events.add(event);
-            }
-            
-            // Insert into ClickHouse
-            insertToClickHouse(events);
-            
-            logger.info("Migrated {} events to warm tier", events.size());
             
         } catch (Exception e) {
             logger.error("Failed to migrate to warm tier", e);
