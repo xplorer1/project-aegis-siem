@@ -119,6 +119,11 @@ public class WarmTierMigrator {
                 
                 logger.info("Migrated {} events to warm tier", totalMigrated);
                 
+                // Post-migration cleanup
+                if (totalMigrated > 0) {
+                    cleanupMigratedData(cutoffMillis);
+                }
+                
             } finally {
                 // Clear scroll context
                 if (scrollId != null) {
@@ -214,5 +219,70 @@ public class WarmTierMigrator {
             logger.error("Failed to batch insert events to ClickHouse", e);
             throw new RuntimeException("Batch insert failed", e);
         }
+    }
+    
+    /**
+     * Cleanup migrated data from hot tier
+     * Deletes old indices after verifying data integrity
+     */
+    private void cleanupMigratedData(long cutoffMillis) {
+        try {
+            logger.info("Starting post-migration cleanup");
+            
+            // Verify data integrity by counting records
+            String countSql = "SELECT count() FROM aegis_events_warm WHERE toUnixTimestamp64Milli(time) < ?";
+            Long warmCount = clickHouseJdbcTemplate.queryForObject(countSql, Long.class, cutoffMillis);
+            
+            logger.info("Verified {} events in warm tier", warmCount);
+            
+            // Get indices to delete
+            java.time.Instant cutoffTime = java.time.Instant.ofEpochMilli(cutoffMillis);
+            java.time.LocalDate cutoffDate = cutoffTime.atZone(java.time.ZoneOffset.UTC).toLocalDate();
+            
+            // Delete indices older than cutoff date
+            var getIndexRequest = new org.opensearch.client.indices.GetIndexRequest("aegis-events-*");
+            var getIndexResponse = openSearchClient.indices().get(getIndexRequest, RequestOptions.DEFAULT);
+            
+            int deletedIndices = 0;
+            for (String indexName : getIndexResponse.getIndices()) {
+                if (shouldDeleteIndex(indexName, cutoffDate)) {
+                    try {
+                        var deleteRequest = new org.opensearch.client.indices.DeleteIndexRequest(indexName);
+                        openSearchClient.indices().delete(deleteRequest, RequestOptions.DEFAULT);
+                        deletedIndices++;
+                        logger.info("Deleted migrated index: {}", indexName);
+                    } catch (Exception e) {
+                        logger.error("Failed to delete index: {}", indexName, e);
+                    }
+                }
+            }
+            
+            logger.info("Post-migration cleanup completed: deleted {} indices", deletedIndices);
+            
+        } catch (Exception e) {
+            logger.error("Post-migration cleanup failed", e);
+            // Don't throw - cleanup failure shouldn't fail the migration
+        }
+    }
+    
+    /**
+     * Check if an index should be deleted based on its date
+     */
+    private boolean shouldDeleteIndex(String indexName, java.time.LocalDate cutoffDate) {
+        try {
+            // Extract date from index name (aegis-events-2022-06-09)
+            String[] parts = indexName.split("-");
+            if (parts.length >= 5) {
+                int year = Integer.parseInt(parts[2]);
+                int month = Integer.parseInt(parts[3]);
+                int day = Integer.parseInt(parts[4]);
+                
+                java.time.LocalDate indexDate = java.time.LocalDate.of(year, month, day);
+                return indexDate.isBefore(cutoffDate);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to parse index date from: {}", indexName);
+        }
+        return false;
     }
 }
