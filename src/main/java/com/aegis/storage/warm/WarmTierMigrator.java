@@ -136,10 +136,14 @@ public class WarmTierMigrator {
     }
     
     /**
-     * Insert events into ClickHouse
-     * Placeholder - will be optimized with batching in next task
+     * Insert events into ClickHouse using batch insert
+     * Optimized for high throughput
      */
     private void insertToClickHouse(List<OcsfEvent> events) {
+        if (events.isEmpty()) {
+            return;
+        }
+        
         String sql = """
             INSERT INTO aegis_events_warm (
                 time, category_name, class_name, severity, message,
@@ -151,33 +155,64 @@ public class WarmTierMigrator {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
         
-        for (OcsfEvent event : events) {
-            try {
-                clickHouseJdbcTemplate.update(sql,
-                    new java.sql.Timestamp(event.getTime()),
-                    event.getCategoryName(),
-                    event.getClassName(),
-                    event.getSeverity(),
-                    event.getMessage(),
-                    event.getActor() != null && event.getActor().getUser() != null 
-                        ? event.getActor().getUser().getUid() : null,
-                    event.getActor() != null && event.getActor().getUser() != null 
-                        ? event.getActor().getUser().getName() : null,
-                    event.getSrcEndpoint() != null ? event.getSrcEndpoint().getIp() : null,
-                    event.getSrcEndpoint() != null ? event.getSrcEndpoint().getPort() : null,
-                    event.getSrcEndpoint() != null ? event.getSrcEndpoint().getHostname() : null,
-                    event.getDstEndpoint() != null ? event.getDstEndpoint().getIp() : null,
-                    event.getDstEndpoint() != null ? event.getDstEndpoint().getPort() : null,
-                    event.getDstEndpoint() != null ? event.getDstEndpoint().getHostname() : null,
-                    event.getMetadata() != null ? objectMapper.writeValueAsString(event.getMetadata()) : null,
-                    event.getThreatInfo() != null ? event.getThreatInfo().getReputationScore() : null,
-                    event.getThreatInfo() != null ? event.getThreatInfo().getThreatLevel() : null,
-                    event.getMetadata() != null ? event.getMetadata().get("ueba_score") : null,
-                    event.getMetadata() != null ? event.getMetadata().get("tenant_id") : "default"
-                );
-            } catch (Exception e) {
-                logger.error("Failed to insert event to ClickHouse", e);
-            }
+        try {
+            clickHouseJdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                    OcsfEvent event = events.get(i);
+                    
+                    try {
+                        ps.setTimestamp(1, new java.sql.Timestamp(event.getTime()));
+                        ps.setString(2, event.getCategoryName());
+                        ps.setString(3, event.getClassName());
+                        ps.setInt(4, event.getSeverity());
+                        ps.setString(5, event.getMessage());
+                        
+                        // Actor fields
+                        ps.setString(6, event.getActor() != null && event.getActor().getUser() != null 
+                            ? event.getActor().getUser().getUid() : null);
+                        ps.setString(7, event.getActor() != null && event.getActor().getUser() != null 
+                            ? event.getActor().getUser().getName() : null);
+                        
+                        // Source endpoint fields
+                        ps.setString(8, event.getSrcEndpoint() != null ? event.getSrcEndpoint().getIp() : null);
+                        ps.setObject(9, event.getSrcEndpoint() != null ? event.getSrcEndpoint().getPort() : null);
+                        ps.setString(10, event.getSrcEndpoint() != null ? event.getSrcEndpoint().getHostname() : null);
+                        
+                        // Destination endpoint fields
+                        ps.setString(11, event.getDstEndpoint() != null ? event.getDstEndpoint().getIp() : null);
+                        ps.setObject(12, event.getDstEndpoint() != null ? event.getDstEndpoint().getPort() : null);
+                        ps.setString(13, event.getDstEndpoint() != null ? event.getDstEndpoint().getHostname() : null);
+                        
+                        // Metadata and enrichment fields
+                        ps.setString(14, event.getMetadata() != null 
+                            ? objectMapper.writeValueAsString(event.getMetadata()) : null);
+                        ps.setObject(15, event.getThreatInfo() != null 
+                            ? event.getThreatInfo().getReputationScore() : null);
+                        ps.setString(16, event.getThreatInfo() != null 
+                            ? event.getThreatInfo().getThreatLevel() : null);
+                        ps.setObject(17, event.getMetadata() != null 
+                            ? event.getMetadata().get("ueba_score") : null);
+                        ps.setString(18, event.getMetadata() != null && event.getMetadata().get("tenant_id") != null
+                            ? event.getMetadata().get("tenant_id").toString() : "default");
+                            
+                    } catch (Exception e) {
+                        logger.error("Failed to prepare statement for event", e);
+                        throw new java.sql.SQLException("Statement preparation failed", e);
+                    }
+                }
+                
+                @Override
+                public int getBatchSize() {
+                    return events.size();
+                }
+            });
+            
+            logger.debug("Batch inserted {} events to ClickHouse", events.size());
+            
+        } catch (Exception e) {
+            logger.error("Failed to batch insert events to ClickHouse", e);
+            throw new RuntimeException("Batch insert failed", e);
         }
     }
 }
