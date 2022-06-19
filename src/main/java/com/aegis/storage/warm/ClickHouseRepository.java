@@ -141,3 +141,144 @@ public class ClickHouseRepository {
         }
     }
 }
+
+    
+    /**
+     * Aggregate events by category
+     */
+    public java.util.Map<String, Long> aggregateByCategory(long startTime, long endTime) {
+        String sql = """
+            SELECT category_name, count() as count
+            FROM aegis_events_warm
+            WHERE toUnixTimestamp64Milli(time) >= ? 
+              AND toUnixTimestamp64Milli(time) <= ?
+            GROUP BY category_name
+            ORDER BY count DESC
+            LIMIT 100
+            """;
+        
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, startTime, endTime);
+        
+        java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
+        for (java.util.Map<String, Object> row : rows) {
+            result.put(
+                (String) row.get("category_name"),
+                ((Number) row.get("count")).longValue()
+            );
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Aggregate events by time (hourly)
+     */
+    public java.util.Map<String, Long> aggregateByTime(long startTime, long endTime) {
+        String sql = """
+            SELECT 
+                toStartOfHour(time) as hour,
+                count() as count
+            FROM aegis_events_warm
+            WHERE toUnixTimestamp64Milli(time) >= ? 
+              AND toUnixTimestamp64Milli(time) <= ?
+            GROUP BY hour
+            ORDER BY hour
+            """;
+        
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, startTime, endTime);
+        
+        java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
+        for (java.util.Map<String, Object> row : rows) {
+            result.put(
+                row.get("hour").toString(),
+                ((Number) row.get("count")).longValue()
+            );
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Get top users by event count
+     */
+    public java.util.Map<String, Long> getTopUsers(long startTime, long endTime, int limit) {
+        String sql = """
+            SELECT actor_user_uid, count() as count
+            FROM aegis_events_warm
+            WHERE toUnixTimestamp64Milli(time) >= ? 
+              AND toUnixTimestamp64Milli(time) <= ?
+              AND actor_user_uid != ''
+            GROUP BY actor_user_uid
+            ORDER BY count DESC
+            LIMIT ?
+            """;
+        
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, 
+            startTime, endTime, limit);
+        
+        java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
+        for (java.util.Map<String, Object> row : rows) {
+            result.put(
+                (String) row.get("actor_user_uid"),
+                ((Number) row.get("count")).longValue()
+            );
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Get top source IPs by event count
+     */
+    public java.util.Map<String, Long> getTopSourceIps(long startTime, long endTime, int limit) {
+        String sql = """
+            SELECT src_endpoint_ip, count() as count
+            FROM aegis_events_warm
+            WHERE toUnixTimestamp64Milli(time) >= ? 
+              AND toUnixTimestamp64Milli(time) <= ?
+              AND src_endpoint_ip != ''
+            GROUP BY src_endpoint_ip
+            ORDER BY count DESC
+            LIMIT ?
+            """;
+        
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, 
+            startTime, endTime, limit);
+        
+        java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
+        for (java.util.Map<String, Object> row : rows) {
+            result.put(
+                (String) row.get("src_endpoint_ip"),
+                ((Number) row.get("count")).longValue()
+            );
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Get event count by severity
+     */
+    public java.util.Map<Integer, Long> aggregateBySeverity(long startTime, long endTime) {
+        String sql = """
+            SELECT severity, count() as count
+            FROM aegis_events_warm
+            WHERE toUnixTimestamp64Milli(time) >= ? 
+              AND toUnixTimestamp64Milli(time) <= ?
+            GROUP BY severity
+            ORDER BY severity
+            """;
+        
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, startTime, endTime);
+        
+        java.util.Map<Integer, Long> result = new java.util.LinkedHashMap<>();
+        for (java.util.Map<String, Object> row : rows) {
+            result.put(
+                ((Number) row.get("severity")).intValue(),
+                ((Number) row.get("count")).longValue()
+            );
+        }
+        
+        return result;
+    }
+}
