@@ -2,10 +2,18 @@ package com.aegis.storage.cold;
 
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.Table;
+import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Types;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.PostConstruct;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.apache.iceberg.types.Types.NestedField.required;
@@ -16,6 +24,56 @@ import static org.apache.iceberg.types.Types.NestedField.required;
 @Component
 public class IcebergSchemaManager {
     private static final Logger logger = LoggerFactory.getLogger(IcebergSchemaManager.class);
+    private static final String NAMESPACE = "aegis";
+    private static final String TABLE_NAME = "events_cold";
+    
+    @Autowired
+    private Catalog catalog;
+    
+    /**
+     * Create events_cold table on startup
+     */
+    @PostConstruct
+    public void createTable() {
+        try {
+            TableIdentifier tableId = TableIdentifier.of(NAMESPACE, TABLE_NAME);
+            
+            // Check if table already exists
+            if (catalog.tableExists(tableId)) {
+                logger.info("Iceberg table already exists: {}", tableId);
+                return;
+            }
+            
+            // Create namespace if it doesn't exist
+            try {
+                catalog.createNamespace(org.apache.iceberg.catalog.Namespace.of(NAMESPACE));
+            } catch (Exception e) {
+                // Namespace might already exist
+                logger.debug("Namespace creation skipped: {}", e.getMessage());
+            }
+            
+            // Define schema and partition spec
+            Schema schema = defineEventSchema();
+            PartitionSpec spec = definePartitionSpec();
+            
+            // Set table properties
+            Map<String, String> properties = new HashMap<>();
+            properties.put("write.format.default", "parquet");
+            properties.put("write.parquet.compression-codec", "snappy");
+            properties.put("write.metadata.compression-codec", "gzip");
+            properties.put("write.target-file-size-bytes", "536870912"); // 512MB
+            
+            // Create table
+            Table table = catalog.createTable(tableId, schema, spec, properties);
+            
+            logger.info("Created Iceberg table: {} with {} partitions", 
+                tableId, spec.fields().size());
+            
+        } catch (Exception e) {
+            logger.error("Failed to create Iceberg table", e);
+            // Don't throw - allow application to start
+        }
+    }
     
     /**
      * Define OCSF event schema for Iceberg
