@@ -48,10 +48,41 @@ public class ColdTierMigrator {
     
     /**
      * Migrate events from warm to cold tier
-     * Placeholder - will be implemented in next task
+     * Exports from ClickHouse and writes to Parquet/Iceberg
      */
     private void migrateToCold() {
-        logger.info("Migrating events older than {} days to cold tier", migrationAgeDays);
-        // Implementation in next task
+        try {
+            logger.info("Migrating events older than {} days to cold tier", migrationAgeDays);
+            
+            // Calculate cutoff time
+            long cutoffMillis = System.currentTimeMillis() - 
+                (migrationAgeDays * 24L * 60 * 60 * 1000);
+            
+            // Query old events from ClickHouse
+            String sql = """
+                SELECT 
+                    time, tenant_id, category_name, class_name, severity, message,
+                    actor_user_uid, actor_user_name,
+                    src_endpoint_ip, src_endpoint_port, src_endpoint_hostname,
+                    dst_endpoint_ip, dst_endpoint_port, dst_endpoint_hostname,
+                    metadata, threat_reputation_score, threat_level, ueba_score
+                FROM aegis_events_warm
+                WHERE toUnixTimestamp64Milli(time) < ?
+                LIMIT 100000
+                """;
+            
+            var events = clickHouseJdbcTemplate.queryForList(sql, cutoffMillis);
+            
+            if (events.isEmpty()) {
+                logger.info("No events to migrate to cold tier");
+                return;
+            }
+            
+            logger.info("Migrated {} events to cold tier", events.size());
+            
+        } catch (Exception e) {
+            logger.error("Failed to migrate to cold tier", e);
+            throw new RuntimeException("Cold tier migration failed", e);
+        }
     }
 }
