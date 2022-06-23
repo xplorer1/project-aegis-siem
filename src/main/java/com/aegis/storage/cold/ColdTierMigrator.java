@@ -1,5 +1,11 @@
 package com.aegis.storage.cold;
 
+import org.apache.iceberg.DataFile;
+import org.apache.iceberg.DataFiles;
+import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.Table;
+import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.TableIdentifier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -8,6 +14,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.Map;
 
 /**
  * Migrates events from warm tier (ClickHouse) to cold tier (Iceberg)
@@ -26,6 +35,9 @@ public class ColdTierMigrator {
     
     @Autowired
     private org.apache.iceberg.catalog.Catalog icebergCatalog;
+    
+    @Autowired
+    private ParquetWriter parquetWriter;
     
     /**
      * Run daily migration at 4 AM
@@ -78,11 +90,49 @@ public class ColdTierMigrator {
                 return;
             }
             
+            // Write to Parquet
+            String parquetPath = String.format("/tmp/aegis-cold-%d.parquet", 
+                System.currentTimeMillis());
+            parquetWriter.writeToParquet(events, parquetPath);
+            
+            // Register with Iceberg
+            registerWithIceberg(parquetPath, events.size());
+            
             logger.info("Migrated {} events to cold tier", events.size());
             
         } catch (Exception e) {
             logger.error("Failed to migrate to cold tier", e);
             throw new RuntimeException("Cold tier migration failed", e);
+        }
+    }
+}
+
+    
+    /**
+     * Register Parquet file with Iceberg table
+     */
+    private void registerWithIceberg(String parquetPath, long recordCount) {
+        try {
+            TableIdentifier tableId = TableIdentifier.of("aegis", "events_cold");
+            Table table = icebergCatalog.loadTable(tableId);
+            
+            // Create DataFile metadata
+            DataFile dataFile = DataFiles.builder(table.spec())
+                .withPath(parquetPath)
+                .withFileSizeInBytes(new java.io.File(parquetPath).length())
+                .withRecordCount(recordCount)
+                .build();
+            
+            // Append to table
+            table.newAppend()
+                .appendFile(dataFile)
+                .commit();
+            
+            logger.info("Registered Parquet file with Iceberg: {}", parquetPath);
+            
+        } catch (Exception e) {
+            logger.error("Failed to register file with Iceberg", e);
+            throw new RuntimeException("Iceberg registration failed", e);
         }
     }
 }
