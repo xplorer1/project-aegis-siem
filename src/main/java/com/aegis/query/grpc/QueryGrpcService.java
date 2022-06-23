@@ -52,6 +52,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
     private final AqlTranspiler aqlTranspiler;
     private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper;
+    private final GrpcExceptionHandler exceptionHandler;
     
     // Metrics
     private final Counter queriesReceived;
@@ -66,15 +67,18 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
      * @param queryExecutor Executor for running queries across storage tiers
      * @param aqlTranspiler Transpiler for converting AQL to tier-specific queries
      * @param meterRegistry Metrics registry for tracking query performance
+     * @param exceptionHandler Handler for mapping exceptions to gRPC Status codes
      */
     public QueryGrpcService(
             QueryExecutor queryExecutor,
             AqlTranspiler aqlTranspiler,
-            MeterRegistry meterRegistry) {
+            MeterRegistry meterRegistry,
+            GrpcExceptionHandler exceptionHandler) {
         this.queryExecutor = queryExecutor;
         this.aqlTranspiler = aqlTranspiler;
         this.meterRegistry = meterRegistry;
         this.objectMapper = new ObjectMapper();
+        this.exceptionHandler = exceptionHandler;
         
         // Initialize metrics
         this.queriesReceived = Counter.builder("query.grpc.queries.received")
@@ -183,16 +187,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
             queriesFailed.increment();
             sample.stop(queryExecutionTimer);
             
-            QueryResponse errorResponse = QueryResponse.newBuilder()
-                .setCode(1)
-                .setMessage("Validation error: " + e.getMessage())
-                .setTotalCount(0)
-                .setExecutionTimeMs(0)
-                .setErrorDetails(e.toString())
-                .build();
-            
-            responseObserver.onNext(errorResponse);
-            responseObserver.onCompleted();
+            throw exceptionHandler.handleException(e, "executeQuery", request.getTenantId());
             
         } catch (Exception e) {
             // Execution error
@@ -200,16 +195,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
             queriesFailed.increment();
             sample.stop(queryExecutionTimer);
             
-            QueryResponse errorResponse = QueryResponse.newBuilder()
-                .setCode(2)
-                .setMessage("Query execution error: " + e.getMessage())
-                .setTotalCount(0)
-                .setExecutionTimeMs(0)
-                .setErrorDetails(e.toString())
-                .build();
-            
-            responseObserver.onNext(errorResponse);
-            responseObserver.onCompleted();
+            throw exceptionHandler.handleException(e, "executeQuery", request.getTenantId());
         }
     }
     
@@ -266,10 +252,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
                     } catch (Exception e) {
                         log.error("Error streaming query results", e);
                         responseObserver.onError(
-                            Status.INTERNAL
-                                .withDescription("Error streaming results: " + e.getMessage())
-                                .withCause(e)
-                                .asRuntimeException()
+                            exceptionHandler.handleException(e, "executeQueryStream", request.getTenantId())
                         );
                     }
                 },
@@ -281,10 +264,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
                     sample.stop(queryExecutionTimer);
                     
                     responseObserver.onError(
-                        Status.INTERNAL
-                            .withDescription("Query execution error: " + error.getMessage())
-                            .withCause(error)
-                            .asRuntimeException()
+                        exceptionHandler.handleException(error, "executeQueryStream", request.getTenantId())
                     );
                 },
                 () -> {
@@ -305,10 +285,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
             sample.stop(queryExecutionTimer);
             
             responseObserver.onError(
-                Status.INVALID_ARGUMENT
-                    .withDescription("Validation error: " + e.getMessage())
-                    .withCause(e)
-                    .asRuntimeException()
+                exceptionHandler.handleException(e, "executeQueryStream", request.getTenantId())
             );
             
         } catch (Exception e) {
@@ -318,10 +295,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
             sample.stop(queryExecutionTimer);
             
             responseObserver.onError(
-                Status.INTERNAL
-                    .withDescription("Failed to start query: " + e.getMessage())
-                    .withCause(e)
-                    .asRuntimeException()
+                exceptionHandler.handleException(e, "executeQueryStream", request.getTenantId())
             );
         }
     }
