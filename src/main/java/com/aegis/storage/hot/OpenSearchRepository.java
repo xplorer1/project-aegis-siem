@@ -2,11 +2,13 @@ package com.aegis.storage.hot;
 
 import com.aegis.domain.OcsfEvent;
 import com.aegis.domain.QueryResult;
+import com.aegis.security.TenantContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.client.RequestOptions;
 import org.opensearch.client.RestHighLevelClient;
+import org.opensearch.index.query.BoolQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.search.SearchHit;
@@ -22,6 +24,9 @@ import java.util.List;
 
 /**
  * Repository for querying OCSF events from OpenSearch
+ * 
+ * All query methods automatically inject tenant_id filters to ensure
+ * multi-tenant isolation at the database driver level.
  */
 @Repository
 public class OpenSearchRepository {
@@ -35,7 +40,30 @@ public class OpenSearchRepository {
     private ObjectMapper objectMapper;
     
     /**
+     * Add tenant filter to a query builder
+     * 
+     * This method wraps any query in a bool query with a tenant_id filter
+     * to ensure multi-tenant isolation. All queries must be scoped to the
+     * current tenant from TenantContext.
+     * 
+     * @param query The original query
+     * @return A bool query with tenant filter applied
+     */
+    private QueryBuilder addTenantFilter(QueryBuilder query) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter: tenant_id = {}", tenantId);
+        
+        BoolQueryBuilder boolQuery = QueryBuilders.boolQuery()
+            .filter(QueryBuilders.termQuery("tenant_id", tenantId))
+            .must(query);
+        
+        return boolQuery;
+    }
+    
+    /**
      * Search events by query
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      * 
      * @param query The query builder
      * @param from Starting offset
@@ -44,8 +72,11 @@ public class OpenSearchRepository {
      */
     public QueryResult<OcsfEvent> search(QueryBuilder query, int from, int size) {
         try {
+            // Inject tenant filter
+            QueryBuilder filteredQuery = addTenantFilter(query);
+            
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-                .query(query)
+                .query(filteredQuery)
                 .from(from)
                 .size(size)
                 .sort("time", SortOrder.DESC);
@@ -148,6 +179,8 @@ public class OpenSearchRepository {
      * Full-text search across event messages
      * Uses match query with highlighting
      * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
+     * 
      * @param searchText Text to search for
      * @param from Starting offset
      * @param size Number of results
@@ -168,8 +201,11 @@ public class OpenSearchRepository {
                 .type(org.opensearch.index.query.MultiMatchQueryBuilder.Type.BEST_FIELDS)
                 .fuzziness(org.opensearch.common.unit.Fuzziness.AUTO);
             
+            // Inject tenant filter
+            QueryBuilder filteredQuery = addTenantFilter(query);
+            
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-                .query(query)
+                .query(filteredQuery)
                 .from(from)
                 .size(size)
                 .sort("time", SortOrder.DESC)
@@ -225,14 +261,22 @@ public class OpenSearchRepository {
     /**
      * Aggregate events by field (terms aggregation)
      * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
+     * 
      * @param field Field to aggregate on
      * @param size Number of buckets
      * @return Map of field values to document counts
      */
     public java.util.Map<String, Long> aggregateByField(String field, int size) {
         try {
+            // Build query with tenant filter
+            String tenantId = TenantContext.requireTenantId();
+            logger.debug("Injecting tenant filter for aggregation: tenant_id = {}", tenantId);
+            
+            QueryBuilder query = QueryBuilders.termQuery("tenant_id", tenantId);
+            
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-                .query(QueryBuilders.matchAllQuery())
+                .query(query)
                 .size(0)  // Don't return documents, only aggregations
                 .aggregation(
                     org.opensearch.search.aggregations.AggregationBuilders
@@ -266,6 +310,8 @@ public class OpenSearchRepository {
     /**
      * Aggregate events by time (date histogram)
      * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
+     * 
      * @param interval Time interval (e.g., "1h", "1d")
      * @param startTime Start timestamp (epoch millis)
      * @param endTime End timestamp (epoch millis)
@@ -275,12 +321,18 @@ public class OpenSearchRepository {
             String interval, long startTime, long endTime) {
         
         try {
-            QueryBuilder query = QueryBuilders.rangeQuery("time")
-                .gte(startTime)
-                .lte(endTime);
+            // Build query with tenant filter and time range
+            String tenantId = TenantContext.requireTenantId();
+            logger.debug("Injecting tenant filter for time aggregation: tenant_id = {}", tenantId);
+            
+            BoolQueryBuilder boolQuery = QueryBuilders.boolQuery()
+                .filter(QueryBuilders.termQuery("tenant_id", tenantId))
+                .filter(QueryBuilders.rangeQuery("time")
+                    .gte(startTime)
+                    .lte(endTime));
             
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-                .query(query)
+                .query(boolQuery)
                 .size(0)
                 .aggregation(
                     org.opensearch.search.aggregations.AggregationBuilders
@@ -349,6 +401,8 @@ public class OpenSearchRepository {
      * Fetch events by IDs in batch
      * This method is optimized for DataLoader to reduce N+1 query problems
      * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
+     * 
      * @param eventIds List of event IDs to fetch
      * @return List of events in the same order as the input IDs
      */
@@ -358,11 +412,16 @@ public class OpenSearchRepository {
         }
         
         try {
-            // Build IDs query
-            QueryBuilder query = QueryBuilders.idsQuery().addIds(eventIds.toArray(new String[0]));
+            // Build query with tenant filter and IDs
+            String tenantId = TenantContext.requireTenantId();
+            logger.debug("Injecting tenant filter for batch fetch: tenant_id = {}", tenantId);
+            
+            BoolQueryBuilder boolQuery = QueryBuilders.boolQuery()
+                .filter(QueryBuilders.termQuery("tenant_id", tenantId))
+                .filter(QueryBuilders.idsQuery().addIds(eventIds.toArray(new String[0])));
             
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-                .query(query)
+                .query(boolQuery)
                 .size(eventIds.size());
             
             SearchRequest request = new SearchRequest(INDEX_PATTERN)

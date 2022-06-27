@@ -1,5 +1,8 @@
 package com.aegis.query;
 
+import com.aegis.security.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -8,15 +11,23 @@ import java.time.format.DateTimeFormatter;
 
 /**
  * Transpiles AQL queries to ClickHouse SQL for warm tier queries
+ * 
+ * This transpiler automatically injects tenant_id filters into all queries
+ * to enforce multi-tenant isolation at the database driver level.
  */
 @Component
 public class ClickHouseTranspiler {
 
+    private static final Logger logger = LoggerFactory.getLogger(ClickHouseTranspiler.class);
+    
     private static final DateTimeFormatter DATETIME_FORMATTER = 
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneOffset.UTC);
 
     /**
      * Transpile QueryContext to ClickHouse SQL
+     * 
+     * Automatically injects tenant_id filter from TenantContext to ensure
+     * multi-tenant isolation. All queries are scoped to the current tenant.
      */
     public String transpileToClickHouse(QueryContext context) {
         StringBuilder sql = new StringBuilder();
@@ -90,17 +101,25 @@ public class ClickHouseTranspiler {
     }
 
     /**
-     * Build WHERE clause
+     * Build WHERE clause with tenant filter and other conditions
+     * 
+     * This method automatically injects the tenant_id filter to ensure
+     * multi-tenant isolation. The tenant filter is always applied first.
      */
     private String buildWhereClause(QueryContext context) {
         StringBuilder where = new StringBuilder();
+        
+        // CRITICAL: Inject tenant ID filter for multi-tenant isolation
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter: tenant_id = '{}'", tenantId);
+        where.append("tenant_id = '").append(tenantId).append("'");
         
         // Time range filter
         TimeRange timeRange = context.getTimeRange();
         String earliest = DATETIME_FORMATTER.format(Instant.ofEpochMilli(timeRange.getEarliest()));
         String latest = DATETIME_FORMATTER.format(Instant.ofEpochMilli(timeRange.getLatest()));
         
-        where.append("time >= '").append(earliest).append("'");
+        where.append(" AND time >= '").append(earliest).append("'");
         where.append(" AND time <= '").append(latest).append("'");
         
         // Additional where expressions

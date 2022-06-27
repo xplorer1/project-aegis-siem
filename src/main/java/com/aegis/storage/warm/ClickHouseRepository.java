@@ -2,6 +2,7 @@ package com.aegis.storage.warm;
 
 import com.aegis.domain.OcsfEvent;
 import com.aegis.domain.QueryResult;
+import com.aegis.security.TenantContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -16,6 +17,9 @@ import java.util.List;
 
 /**
  * Repository for querying events from ClickHouse warm tier
+ * 
+ * All query methods automatically inject tenant_id filters to ensure
+ * multi-tenant isolation at the database driver level.
  */
 @Repository
 public class ClickHouseRepository {
@@ -27,8 +31,13 @@ public class ClickHouseRepository {
     
     /**
      * Search events by time range
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public QueryResult<OcsfEvent> searchByTimeRange(long startTime, long endTime, int limit) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT 
                 time, category_name, class_name, severity, message,
@@ -38,7 +47,8 @@ public class ClickHouseRepository {
                 metadata, threat_reputation_score, threat_level,
                 ueba_score, tenant_id
             FROM aegis_events_warm
-            WHERE toUnixTimestamp64Milli(time) >= ? 
+            WHERE tenant_id = ?
+              AND toUnixTimestamp64Milli(time) >= ? 
               AND toUnixTimestamp64Milli(time) <= ?
             ORDER BY time DESC
             LIMIT ?
@@ -46,7 +56,7 @@ public class ClickHouseRepository {
         
         long startQuery = System.currentTimeMillis();
         List<OcsfEvent> events = jdbcTemplate.query(sql, new OcsfEventRowMapper(), 
-            startTime, endTime, limit);
+            tenantId, startTime, endTime, limit);
         long duration = System.currentTimeMillis() - startQuery;
         
         QueryResult<OcsfEvent> result = new QueryResult<>();
@@ -60,8 +70,13 @@ public class ClickHouseRepository {
     
     /**
      * Search events by category
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public QueryResult<OcsfEvent> searchByCategory(String category, int limit) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT 
                 time, category_name, class_name, severity, message,
@@ -71,14 +86,15 @@ public class ClickHouseRepository {
                 metadata, threat_reputation_score, threat_level,
                 ueba_score, tenant_id
             FROM aegis_events_warm
-            WHERE category_name = ?
+            WHERE tenant_id = ?
+              AND category_name = ?
             ORDER BY time DESC
             LIMIT ?
             """;
         
         long startQuery = System.currentTimeMillis();
         List<OcsfEvent> events = jdbcTemplate.query(sql, new OcsfEventRowMapper(), 
-            category, limit);
+            tenantId, category, limit);
         long duration = System.currentTimeMillis() - startQuery;
         
         QueryResult<OcsfEvent> result = new QueryResult<>();
@@ -91,8 +107,13 @@ public class ClickHouseRepository {
     
     /**
      * Search events by user
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public QueryResult<OcsfEvent> searchByUser(String userId, int limit) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT 
                 time, category_name, class_name, severity, message,
@@ -102,14 +123,15 @@ public class ClickHouseRepository {
                 metadata, threat_reputation_score, threat_level,
                 ueba_score, tenant_id
             FROM aegis_events_warm
-            WHERE actor_user_uid = ?
+            WHERE tenant_id = ?
+              AND actor_user_uid = ?
             ORDER BY time DESC
             LIMIT ?
             """;
         
         long startQuery = System.currentTimeMillis();
         List<OcsfEvent> events = jdbcTemplate.query(sql, new OcsfEventRowMapper(), 
-            userId, limit);
+            tenantId, userId, limit);
         long duration = System.currentTimeMillis() - startQuery;
         
         QueryResult<OcsfEvent> result = new QueryResult<>();
@@ -143,19 +165,26 @@ public class ClickHouseRepository {
     
     /**
      * Aggregate events by category
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public java.util.Map<String, Long> aggregateByCategory(long startTime, long endTime) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter for category aggregation: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT category_name, count() as count
             FROM aegis_events_warm
-            WHERE toUnixTimestamp64Milli(time) >= ? 
+            WHERE tenant_id = ?
+              AND toUnixTimestamp64Milli(time) >= ? 
               AND toUnixTimestamp64Milli(time) <= ?
             GROUP BY category_name
             ORDER BY count DESC
             LIMIT 100
             """;
         
-        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, startTime, endTime);
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, 
+            tenantId, startTime, endTime);
         
         java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
         for (java.util.Map<String, Object> row : rows) {
@@ -170,20 +199,27 @@ public class ClickHouseRepository {
     
     /**
      * Aggregate events by time (hourly)
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public java.util.Map<String, Long> aggregateByTime(long startTime, long endTime) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter for time aggregation: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT 
                 toStartOfHour(time) as hour,
                 count() as count
             FROM aegis_events_warm
-            WHERE toUnixTimestamp64Milli(time) >= ? 
+            WHERE tenant_id = ?
+              AND toUnixTimestamp64Milli(time) >= ? 
               AND toUnixTimestamp64Milli(time) <= ?
             GROUP BY hour
             ORDER BY hour
             """;
         
-        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, startTime, endTime);
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, 
+            tenantId, startTime, endTime);
         
         java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
         for (java.util.Map<String, Object> row : rows) {
@@ -198,12 +234,18 @@ public class ClickHouseRepository {
     
     /**
      * Get top users by event count
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public java.util.Map<String, Long> getTopUsers(long startTime, long endTime, int limit) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter for top users: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT actor_user_uid, count() as count
             FROM aegis_events_warm
-            WHERE toUnixTimestamp64Milli(time) >= ? 
+            WHERE tenant_id = ?
+              AND toUnixTimestamp64Milli(time) >= ? 
               AND toUnixTimestamp64Milli(time) <= ?
               AND actor_user_uid != ''
             GROUP BY actor_user_uid
@@ -212,7 +254,7 @@ public class ClickHouseRepository {
             """;
         
         List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, 
-            startTime, endTime, limit);
+            tenantId, startTime, endTime, limit);
         
         java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
         for (java.util.Map<String, Object> row : rows) {
@@ -227,12 +269,18 @@ public class ClickHouseRepository {
     
     /**
      * Get top source IPs by event count
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public java.util.Map<String, Long> getTopSourceIps(long startTime, long endTime, int limit) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter for top source IPs: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT src_endpoint_ip, count() as count
             FROM aegis_events_warm
-            WHERE toUnixTimestamp64Milli(time) >= ? 
+            WHERE tenant_id = ?
+              AND toUnixTimestamp64Milli(time) >= ? 
               AND toUnixTimestamp64Milli(time) <= ?
               AND src_endpoint_ip != ''
             GROUP BY src_endpoint_ip
@@ -241,7 +289,7 @@ public class ClickHouseRepository {
             """;
         
         List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, 
-            startTime, endTime, limit);
+            tenantId, startTime, endTime, limit);
         
         java.util.Map<String, Long> result = new java.util.LinkedHashMap<>();
         for (java.util.Map<String, Object> row : rows) {
@@ -256,18 +304,25 @@ public class ClickHouseRepository {
     
     /**
      * Get event count by severity
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      */
     public java.util.Map<Integer, Long> aggregateBySeverity(long startTime, long endTime) {
+        String tenantId = TenantContext.requireTenantId();
+        logger.debug("Injecting tenant filter for severity aggregation: tenant_id = '{}'", tenantId);
+        
         String sql = """
             SELECT severity, count() as count
             FROM aegis_events_warm
-            WHERE toUnixTimestamp64Milli(time) >= ? 
+            WHERE tenant_id = ?
+              AND toUnixTimestamp64Milli(time) >= ? 
               AND toUnixTimestamp64Milli(time) <= ?
             GROUP BY severity
             ORDER BY severity
             """;
         
-        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, startTime, endTime);
+        List<java.util.Map<String, Object>> rows = jdbcTemplate.queryForList(sql, 
+            tenantId, startTime, endTime);
         
         java.util.Map<Integer, Long> result = new java.util.LinkedHashMap<>();
         for (java.util.Map<String, Object> row : rows) {

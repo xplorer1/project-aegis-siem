@@ -3,6 +3,7 @@ package com.aegis.storage.hot;
 import com.aegis.domain.Alert;
 import com.aegis.domain.AlertStatus;
 import com.aegis.domain.QueryResult;
+import com.aegis.security.TenantContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.index.IndexResponse;
@@ -26,6 +27,9 @@ import java.util.List;
 
 /**
  * Repository for querying alerts from OpenSearch
+ * 
+ * All query methods automatically inject tenant_id filters to ensure
+ * multi-tenant isolation at the database driver level.
  */
 @Repository
 public class AlertRepository {
@@ -40,6 +44,8 @@ public class AlertRepository {
     
     /**
      * Find alerts with optional filters
+     * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
      * 
      * @param severity Optional severity filter (1-5)
      * @param status Optional status filter
@@ -60,6 +66,11 @@ public class AlertRepository {
         try {
             // Build bool query with filters
             BoolQueryBuilder boolQuery = QueryBuilders.boolQuery();
+            
+            // CRITICAL: Inject tenant ID filter for multi-tenant isolation
+            String tenantId = TenantContext.requireTenantId();
+            logger.debug("Injecting tenant filter: tenant_id = {}", tenantId);
+            boolQuery.filter(QueryBuilders.termQuery("tenant_id", tenantId));
             
             // Always filter by time range
             boolQuery.filter(QueryBuilders.rangeQuery("time")
@@ -111,13 +122,23 @@ public class AlertRepository {
     /**
      * Find alert by ID
      * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
+     * 
      * @param alertId Alert identifier
      * @return Alert if found, null otherwise
      */
     public Alert findById(String alertId) {
         try {
+            // CRITICAL: Inject tenant ID filter for multi-tenant isolation
+            String tenantId = TenantContext.requireTenantId();
+            logger.debug("Injecting tenant filter for alert lookup: tenant_id = {}", tenantId);
+            
+            BoolQueryBuilder boolQuery = QueryBuilders.boolQuery()
+                .filter(QueryBuilders.termQuery("tenant_id", tenantId))
+                .filter(QueryBuilders.termQuery("_id", alertId));
+            
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder()
-                .query(QueryBuilders.termQuery("_id", alertId))
+                .query(boolQuery)
                 .size(1);
             
             SearchRequest request = new SearchRequest(ALERTS_INDEX)
@@ -144,6 +165,8 @@ public class AlertRepository {
     /**
      * Count alerts matching criteria
      * 
+     * Automatically injects tenant_id filter to ensure multi-tenant isolation.
+     * 
      * @param severity Optional severity filter
      * @param status Optional status filter
      * @param startTime Start timestamp (epoch millis)
@@ -158,6 +181,11 @@ public class AlertRepository {
         
         try {
             BoolQueryBuilder boolQuery = QueryBuilders.boolQuery();
+            
+            // CRITICAL: Inject tenant ID filter for multi-tenant isolation
+            String tenantId = TenantContext.requireTenantId();
+            logger.debug("Injecting tenant filter for alert count: tenant_id = {}", tenantId);
+            boolQuery.filter(QueryBuilders.termQuery("tenant_id", tenantId));
             
             boolQuery.filter(QueryBuilders.rangeQuery("time")
                 .gte(startTime)
