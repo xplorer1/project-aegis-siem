@@ -5,6 +5,8 @@ import com.aegis.domain.AlertStatus;
 import com.aegis.domain.OcsfEvent;
 import com.aegis.query.AqlTranspiler;
 import com.aegis.query.QueryExecutor;
+import com.aegis.security.TenantContext;
+import com.aegis.security.TenantValidator;
 import com.aegis.storage.hot.AlertRepository;
 import org.dataloader.DataLoader;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,24 +72,36 @@ public class AegisGraphQLController {
     private final QueryExecutor queryExecutor;
     
     /**
+     * Validator for enforcing multi-tenant isolation
+     * Ensures tenant_id in requests matches authenticated tenant_id
+     */
+    private final TenantValidator tenantValidator;
+    
+    /**
      * Constructor with dependency injection
      * 
      * @param alertRepository Repository for alert operations
      * @param aqlTranspiler AQL query transpiler
      * @param queryExecutor Query executor for multi-tier queries
+     * @param tenantValidator Validator for tenant access control
      */
     @Autowired
     public AegisGraphQLController(
             AlertRepository alertRepository,
             AqlTranspiler aqlTranspiler,
-            QueryExecutor queryExecutor) {
+            QueryExecutor queryExecutor,
+            TenantValidator tenantValidator) {
         this.alertRepository = alertRepository;
         this.aqlTranspiler = aqlTranspiler;
         this.queryExecutor = queryExecutor;
+        this.tenantValidator = tenantValidator;
     }
     
     /**
      * Query alerts with optional filters
+     * 
+     * This method enforces tenant isolation by validating that the authenticated
+     * tenant (from JWT token) matches the tenant of the requested alerts.
      * 
      * @param severity Optional severity filter (1=Info, 2=Low, 3=Medium, 4=High, 5=Critical)
      * @param status Optional status filter
@@ -107,6 +121,12 @@ public class AegisGraphQLController {
         logger.debug("getAlerts called with severity={}, status={}, timeRange={}, limit={}, offset={}",
             severity, status, timeRange, limit, offset);
         
+        // Get authenticated tenant from context
+        // The TenantInterceptor has already validated the JWT and set the tenant context
+        String authenticatedTenantId = tenantValidator.getAuthenticatedTenantId();
+        
+        logger.debug("Authenticated tenant: {}", authenticatedTenantId);
+        
         // Parse time range
         TimeRangeBounds bounds = parseTimeRange(timeRange);
         
@@ -125,7 +145,8 @@ public class AegisGraphQLController {
         int resultLimit = (limit != null && limit > 0) ? Math.min(limit, 10000) : 100;
         int resultOffset = (offset != null && offset >= 0) ? offset : 0;
         
-        // Query alerts
+        // Query alerts - the repository will automatically filter by tenant_id
+        // using the TenantContext set by TenantInterceptor
         List<Alert> alerts = alertRepository.findAlerts(
             severity,
             alertStatus,
@@ -135,7 +156,17 @@ public class AegisGraphQLController {
             resultOffset
         );
         
-        logger.info("Returning {} alerts", alerts.size());
+        // Validate that all returned alerts belong to the authenticated tenant
+        // This is a defense-in-depth measure to catch any bugs in the repository layer
+        for (Alert alert : alerts) {
+            if (alert.getTenantId() != null && !alert.getTenantId().equals(authenticatedTenantId)) {
+                logger.error("Security violation: Alert {} belongs to tenant {} but authenticated tenant is {}",
+                    alert.getId(), alert.getTenantId(), authenticatedTenantId);
+                throw new IllegalStateException("Internal error: tenant isolation violation detected");
+            }
+        }
+        
+        logger.info("Returning {} alerts for tenant {}", alerts.size(), authenticatedTenantId);
         return alerts;
     }
     
@@ -215,6 +246,9 @@ public class AegisGraphQLController {
      * Acknowledge an alert
      * Updates the alert status to ACKNOWLEDGED and records the acknowledgment timestamp
      * 
+     * This method enforces tenant isolation by validating that the alert being
+     * acknowledged belongs to the authenticated tenant.
+     * 
      * @param alertId The unique identifier of the alert to acknowledge
      * @return The updated alert
      */
@@ -226,12 +260,26 @@ public class AegisGraphQLController {
             throw new IllegalArgumentException("alertId is required");
         }
         
+        // Get authenticated tenant from context
+        String authenticatedTenantId = tenantValidator.getAuthenticatedTenantId();
+        
+        logger.debug("Authenticated tenant: {}", authenticatedTenantId);
+        
         // Find the alert
         Alert alert = alertRepository.findById(alertId);
         
         if (alert == null) {
             logger.warn("Alert not found: {}", alertId);
             throw new IllegalArgumentException("Alert not found: " + alertId);
+        }
+        
+        // Validate tenant access - ensure the alert belongs to the authenticated tenant
+        // This enforces Requirement 9.6: tenant_id validation
+        if (alert.getTenantId() != null) {
+            tenantValidator.validateTenantAccess(alert.getTenantId());
+            logger.debug("Tenant validation successful for alert {}", alertId);
+        } else {
+            logger.warn("Alert {} has no tenant_id set", alertId);
         }
         
         // Update alert status
@@ -241,7 +289,7 @@ public class AegisGraphQLController {
         // Save the updated alert
         Alert updatedAlert = alertRepository.save(alert);
         
-        logger.info("Alert {} acknowledged successfully", alertId);
+        logger.info("Alert {} acknowledged successfully by tenant {}", alertId, authenticatedTenantId);
         return updatedAlert;
     }
     

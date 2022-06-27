@@ -1,5 +1,6 @@
 package com.aegis.query.grpc.interceptor;
 
+import com.aegis.security.TenantContext;
 import io.grpc.*;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -157,14 +158,44 @@ public class AuthenticationInterceptor implements ServerInterceptor {
             }
             
             // Authentication successful - set tenant ID in context
+            // Set in both gRPC Context and TenantContext for consistency
             Context context = Context.current()
                 .withValue(TENANT_ID_CONTEXT_KEY, tenantId);
+            
+            // Also set in TenantContext for use by TenantValidator
+            // This ensures consistency between HTTP (via TenantInterceptor) and gRPC paths
+            TenantContext.setTenantId(tenantId);
             
             authenticationSuccesses.increment();
             log.debug("Authentication successful for tenant: {} on call: {}", tenantId, methodName);
             
             // Proceed with the call in the authenticated context
-            return Contexts.interceptCall(context, call, headers, next);
+            // Wrap the listener to ensure TenantContext is cleared after the call
+            ServerCall.Listener<ReqT> listener = Contexts.interceptCall(context, call, headers, next);
+            
+            return new ForwardingServerCallListener.SimpleForwardingServerCallListener<ReqT>(listener) {
+                @Override
+                public void onComplete() {
+                    try {
+                        super.onComplete();
+                    } finally {
+                        // Clear TenantContext after request completes
+                        TenantContext.clear();
+                        log.trace("Cleared TenantContext after gRPC call completion");
+                    }
+                }
+                
+                @Override
+                public void onCancel() {
+                    try {
+                        super.onCancel();
+                    } finally {
+                        // Clear TenantContext if request is cancelled
+                        TenantContext.clear();
+                        log.trace("Cleared TenantContext after gRPC call cancellation");
+                    }
+                }
+            };
             
         } catch (Exception e) {
             log.error("Authentication error for gRPC call: {}", methodName, e);

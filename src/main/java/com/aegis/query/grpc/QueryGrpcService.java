@@ -6,6 +6,7 @@ import com.aegis.query.AqlTranspiler;
 import com.aegis.query.QueryExecutor;
 import com.aegis.query.QueryPlan;
 import com.aegis.query.grpc.proto.*;
+import com.aegis.security.TenantValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
@@ -53,6 +54,7 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
     private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper;
     private final GrpcExceptionHandler exceptionHandler;
+    private final TenantValidator tenantValidator;
     
     // Metrics
     private final Counter queriesReceived;
@@ -68,17 +70,20 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
      * @param aqlTranspiler Transpiler for converting AQL to tier-specific queries
      * @param meterRegistry Metrics registry for tracking query performance
      * @param exceptionHandler Handler for mapping exceptions to gRPC Status codes
+     * @param tenantValidator Validator for tenant access control
      */
     public QueryGrpcService(
             QueryExecutor queryExecutor,
             AqlTranspiler aqlTranspiler,
             MeterRegistry meterRegistry,
-            GrpcExceptionHandler exceptionHandler) {
+            GrpcExceptionHandler exceptionHandler,
+            TenantValidator tenantValidator) {
         this.queryExecutor = queryExecutor;
         this.aqlTranspiler = aqlTranspiler;
         this.meterRegistry = meterRegistry;
         this.objectMapper = new ObjectMapper();
         this.exceptionHandler = exceptionHandler;
+        this.tenantValidator = tenantValidator;
         
         // Initialize metrics
         this.queriesReceived = Counter.builder("query.grpc.queries.received")
@@ -109,10 +114,11 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
      * 
      * This is a unary RPC that:
      * 1. Validates the request (tenant_id, query string)
-     * 2. Transpiles the AQL query to a QueryPlan
-     * 3. Executes the plan across relevant storage tiers
-     * 4. Converts the QueryResult to a gRPC QueryResponse
-     * 5. Returns the response with all results
+     * 2. Validates tenant access (Requirement 9.6)
+     * 3. Transpiles the AQL query to a QueryPlan
+     * 4. Executes the plan across relevant storage tiers
+     * 5. Converts the QueryResult to a gRPC QueryResponse
+     * 6. Returns the response with all results
      * 
      * For large result sets, consider using executeQueryStream instead.
      * 
@@ -134,6 +140,14 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
         try {
             // Validate request
             validateRequest(request);
+            
+            // Validate tenant access - Requirement 9.6
+            // The AuthenticationInterceptor has already extracted the tenant_id from JWT
+            // and set it in TenantContext. Now we validate that the request tenant_id
+            // matches the authenticated tenant_id.
+            tenantValidator.validateTenantAccess(request.getTenantId());
+            
+            log.debug("Tenant validation successful for tenant: {}", request.getTenantId());
             
             // Transpile AQL query to QueryPlan
             QueryPlan queryPlan = aqlTranspiler.transpile(request.getQuery());
@@ -204,9 +218,10 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
      * 
      * This is a server-streaming RPC that:
      * 1. Validates the request
-     * 2. Transpiles the AQL query to a QueryPlan
-     * 3. Executes the query and streams results in batches
-     * 4. Sends multiple QueryResponse messages as results become available
+     * 2. Validates tenant access (Requirement 9.6)
+     * 3. Transpiles the AQL query to a QueryPlan
+     * 4. Executes the query and streams results in batches
+     * 5. Sends multiple QueryResponse messages as results become available
      * 
      * This is more efficient for large result sets as it:
      * - Reduces memory usage on both client and server
@@ -233,6 +248,11 @@ public class QueryGrpcService extends QueryServiceGrpc.QueryServiceImplBase {
         try {
             // Validate request
             validateRequest(request);
+            
+            // Validate tenant access - Requirement 9.6
+            tenantValidator.validateTenantAccess(request.getTenantId());
+            
+            log.debug("Tenant validation successful for streaming query, tenant: {}", request.getTenantId());
             
             // Transpile AQL query to QueryPlan
             QueryPlan queryPlan = aqlTranspiler.transpile(request.getQuery());

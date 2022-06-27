@@ -1,5 +1,6 @@
 package com.aegis.graphql;
 
+import com.aegis.security.TenantAccessDeniedException;
 import graphql.GraphQLError;
 import graphql.GraphqlErrorBuilder;
 import graphql.schema.DataFetchingEnvironment;
@@ -38,6 +39,11 @@ public class GraphQLErrorHandler extends DataFetcherExceptionResolverAdapter {
      */
     @Override
     protected GraphQLError resolveToSingleError(Throwable ex, DataFetchingEnvironment env) {
+        // Handle tenant access denied exceptions (Requirement 9.6)
+        if (ex instanceof TenantAccessDeniedException) {
+            return handleTenantAccessDeniedException((TenantAccessDeniedException) ex, env);
+        }
+        
         // Handle custom GraphQL exceptions
         if (ex instanceof GraphQLException) {
             return handleGraphQLException((GraphQLException) ex, env);
@@ -60,6 +66,29 @@ public class GraphQLErrorHandler extends DataFetcherExceptionResolverAdapter {
         
         // Handle all other exceptions as internal errors
         return handleGenericException(ex, env);
+    }
+    
+    /**
+     * Handles TenantAccessDeniedException by creating a FORBIDDEN error.
+     * This enforces Requirement 9.6: tenant_id validation.
+     */
+    private GraphQLError handleTenantAccessDeniedException(TenantAccessDeniedException ex, DataFetchingEnvironment env) {
+        Map<String, Object> extensions = new HashMap<>();
+        extensions.put("errorCode", "TENANT_ACCESS_DENIED");
+        
+        if (ex.getAuthenticatedTenantId() != null) {
+            extensions.put("authenticatedTenantId", ex.getAuthenticatedTenantId());
+        }
+        
+        if (ex.getRequestedTenantId() != null) {
+            extensions.put("requestedTenantId", ex.getRequestedTenantId());
+        }
+        
+        return GraphqlErrorBuilder.newError(env)
+                .errorType(ErrorType.FORBIDDEN)
+                .message("Access denied: You do not have permission to access resources for the requested tenant")
+                .extensions(extensions)
+                .build();
     }
 
     /**

@@ -2,6 +2,7 @@ package com.aegis.query.grpc;
 
 import com.aegis.normalization.parsers.ParseException;
 import com.aegis.query.QueryExecutionException;
+import com.aegis.security.TenantAccessDeniedException;
 import com.google.protobuf.Any;
 import com.google.rpc.BadRequest;
 import com.google.rpc.DebugInfo;
@@ -72,6 +73,7 @@ public class GrpcExceptionHandler {
     private static final String REASON_QUERY_EXECUTION_FAILED = "QUERY_EXECUTION_FAILED";
     private static final String REASON_QUERY_TIMEOUT = "QUERY_TIMEOUT";
     private static final String REASON_PERMISSION_DENIED = "PERMISSION_DENIED";
+    private static final String REASON_TENANT_ACCESS_DENIED = "TENANT_ACCESS_DENIED";
     private static final String REASON_UNSUPPORTED_OPERATION = "UNSUPPORTED_OPERATION";
     private static final String REASON_INVALID_STATE = "INVALID_STATE";
     private static final String REASON_INTERNAL_ERROR = "INTERNAL_ERROR";
@@ -113,6 +115,19 @@ public class GrpcExceptionHandler {
      * @return The appropriate gRPC Status
      */
     private Status mapExceptionToStatus(Throwable exception) {
+        // Tenant access denied errors (Requirement 9.6)
+        if (exception instanceof TenantAccessDeniedException) {
+            TenantAccessDeniedException tenantEx = (TenantAccessDeniedException) exception;
+            String message = "Tenant access denied";
+            if (tenantEx.getAuthenticatedTenantId() != null && tenantEx.getRequestedTenantId() != null) {
+                message = String.format("Tenant '%s' cannot access resources for tenant '%s'",
+                    tenantEx.getAuthenticatedTenantId(), tenantEx.getRequestedTenantId());
+            }
+            return Status.PERMISSION_DENIED
+                .withDescription(message)
+                .withCause(exception);
+        }
+        
         // Validation errors
         if (exception instanceof IllegalArgumentException) {
             return Status.INVALID_ARGUMENT
@@ -262,6 +277,17 @@ public class GrpcExceptionHandler {
             ParseException parseEx = (ParseException) exception;
             if (parseEx.getVendorType() != null) {
                 builder.putMetadata("vendor_type", parseEx.getVendorType());
+            }
+        }
+        
+        // Add tenant information for TenantAccessDeniedException
+        if (exception instanceof TenantAccessDeniedException) {
+            TenantAccessDeniedException tenantEx = (TenantAccessDeniedException) exception;
+            if (tenantEx.getAuthenticatedTenantId() != null) {
+                builder.putMetadata("authenticated_tenant_id", tenantEx.getAuthenticatedTenantId());
+            }
+            if (tenantEx.getRequestedTenantId() != null) {
+                builder.putMetadata("requested_tenant_id", tenantEx.getRequestedTenantId());
             }
         }
         
@@ -419,7 +445,9 @@ public class GrpcExceptionHandler {
      * @return The error reason
      */
     private String getErrorReason(Throwable exception) {
-        if (exception instanceof IllegalArgumentException) {
+        if (exception instanceof TenantAccessDeniedException) {
+            return REASON_TENANT_ACCESS_DENIED;
+        } else if (exception instanceof IllegalArgumentException) {
             return REASON_VALIDATION_FAILED;
         } else if (exception instanceof ParseException) {
             return REASON_QUERY_PARSE_FAILED;
