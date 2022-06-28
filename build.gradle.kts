@@ -202,12 +202,20 @@ protobuf {
     }
 }
 
+// ANTLR configuration for AQL parser generation
+tasks.generateGrammarSource {
+    maxHeapSize = "64m"
+    arguments = arguments + listOf("-visitor", "-long-messages", "-package", "com.aegis.query.parser")
+    outputDirectory = file("build/generated-src/antlr/main/com/aegis/query/parser")
+}
+
 // Ensure generated sources are included in source sets
 sourceSets {
     main {
         java {
             srcDirs("build/generated/source/proto/main/grpc")
             srcDirs("build/generated/source/proto/main/java")
+            srcDirs("build/generated-src/antlr/main")
         }
     }
 }
