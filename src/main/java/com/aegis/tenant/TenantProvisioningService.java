@@ -2,6 +2,7 @@ package com.aegis.tenant;
 
 import com.aegis.domain.Tenant;
 import com.aegis.domain.TenantStatus;
+import com.aegis.security.TenantKeyService;
 import com.aegis.storage.TenantRepository;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -33,16 +34,20 @@ public class TenantProvisioningService {
     public static final String SETTING_KAFKA_NORMALIZED_TOPIC = "kafka.topics.normalized-events";
     public static final String SETTING_KAFKA_ALERTS_TOPIC = "kafka.topics.alerts";
     public static final String SETTING_KAFKA_DLQ_TOPIC = "kafka.topics.dead-letter";
+    public static final String SETTING_TENANT_MASTER_KEY_ID = "encryption.kms.masterKeyId";
 
     private final TenantRepository tenantRepository;
     private final ObjectProvider<AdminClient> adminClientProvider;
+    private final TenantKeyService tenantKeyService;
 
     public TenantProvisioningService(
         TenantRepository tenantRepository,
-        ObjectProvider<AdminClient> adminClientProvider
+        ObjectProvider<AdminClient> adminClientProvider,
+        TenantKeyService tenantKeyService
     ) {
         this.tenantRepository = tenantRepository;
         this.adminClientProvider = adminClientProvider;
+        this.tenantKeyService = tenantKeyService;
     }
 
     public TenantProvisioningResult provisionTenant(TenantProvisioningRequest request) {
@@ -74,6 +79,11 @@ public class TenantProvisioningService {
             .build();
 
         Map<String, String> resources = new HashMap<>();
+
+        // Ensure tenant has a dedicated master key reference
+        String masterKeyId = tenantKeyService.ensureTenantMasterKey(tenant.getId());
+        tenant.getSettings().put(SETTING_TENANT_MASTER_KEY_ID, masterKeyId);
+        resources.put("kms.masterKeyId", masterKeyId);
 
         if (provisionTopics) {
             Map<String, String> topics = provisionKafkaTopics(tenant);
